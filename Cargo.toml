@@ -1,0 +1,17 @@
+[package]
+name = "readit"
+version = "0.3.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui-component = { version = "=0.5.1", features = ["tree-sitter-languages"] }
+gpui-component-assets = "=0.5.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+futures-channel = "0.3"
+
+[profile.dev]
+debug = 0

@@ -1,0 +1,7 @@
+/target/
+/artifacts/
+.DS_Store
+.readit/
+__pycache__/
+node_modules/
+tools/lsp/runtime.json

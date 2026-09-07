@@ -1,0 +1,11 @@
+{
+  "name": "readit-language-services",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local language servers used by Readit",
+  "dependencies": {
+    "pyright": "1.1.413",
+    "typescript": "5.9.3",
+    "typescript-language-server": "6.0.0"
+  }
+}
