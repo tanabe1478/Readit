@@ -23,7 +23,6 @@ actions!(
         Find,
         Replace,
         ToggleSidebar,
-        ToggleInspector,
         ToggleWrap,
         RenameFile,
         DeleteFile,
@@ -47,12 +46,14 @@ actions!(
         Implementation,
         References,
         DocumentSymbols,
-        HoverInfo
+        HoverInfo,
+        PinCode
     ]
 );
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("cmd-k cmd-p", PinCode, Some("Readit")),
         KeyBinding::new("f12", Definition, Some("Readit")),
         KeyBinding::new("alt-f12", PeekDefinition, Some("Readit")),
         KeyBinding::new("cmd-f12", TypeDefinition, Some("Readit")),
@@ -83,7 +84,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-f", Find, Some("Readit")),
         KeyBinding::new("cmd-alt-f", Replace, Some("Readit")),
         KeyBinding::new("cmd-b", ToggleSidebar, Some("Readit")),
-        KeyBinding::new("cmd-alt-b", ToggleInspector, Some("Readit")),
         KeyBinding::new("alt-z", ToggleWrap, Some("Readit")),
         KeyBinding::new("cmd-shift-e", FocusExplorer, Some("Readit")),
         KeyBinding::new("f2", RenameFile, Some("Explorer")),
@@ -151,7 +151,6 @@ pub fn init(cx: &mut App) {
             name: "表示".into(),
             items: vec![
                 MenuItem::action("エクスプローラー", ToggleSidebar),
-                MenuItem::action("理解メモ", ToggleInspector),
                 MenuItem::action("折返し", ToggleWrap),
                 MenuItem::action("差分比較", Compare),
                 MenuItem::action("拡大", ZoomIn),

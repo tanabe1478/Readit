@@ -17,7 +17,7 @@ pub struct Position {
     pub line: u32,
     pub character: u32,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Target {
     pub path: PathBuf,
     pub start: Position,

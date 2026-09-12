@@ -1,23 +1,56 @@
 mod commands;
+#[cfg(feature = "performance")]
+mod performance;
 mod ui;
 use gpui::*;
 use readit::workspace::Workspace;
 use std::path::PathBuf;
 
 fn main() {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|a| a == "--help") {
-        println!(
-            "Readit — code reading prototype\n\nreadit [repository-directory]\nreadit --demo\n\nNo AI service or code execution. Review notes are stored in <directory>/.readit/session.json."
-        );
-        return;
+    #[cfg(feature = "performance")]
+    performance::init();
+    let mut socket = None;
+    let mut directory = None;
+    let mut demo = false;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                println!(
+                    "Readit — code reading editor\n\nreadit [repository-directory] [--control-socket /private/directory/control.sock]\nreadit --demo\n\nA local MCP client can guide the visible editor when --control-socket is set."
+                );
+                return;
+            }
+            "--control-socket" => {
+                socket = Some(PathBuf::from(args.next().unwrap_or_else(|| {
+                    eprintln!("--control-socket requires a path");
+                    std::process::exit(2)
+                })));
+            }
+            "--demo" => demo = true,
+            value if !value.starts_with('-') && directory.is_none() => {
+                directory = Some(PathBuf::from(value))
+            }
+            _ => {
+                eprintln!("unknown argument: {arg}");
+                std::process::exit(2);
+            }
+        }
     }
-    let demo = args.is_empty() || args[0] == "--demo";
-    let root = if demo {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("demo")
-    } else {
-        PathBuf::from(&args[0])
-    };
+    if demo && directory.is_some() {
+        eprintln!("choose --demo or a repository directory");
+        std::process::exit(2);
+    }
+    demo = demo || directory.is_none();
+    let root = directory.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("demo"));
+    let control = socket.map(|path| {
+        let server = readit::control::Server::bind(&path).unwrap_or_else(|error| {
+            eprintln!("Readit control: {error}");
+            std::process::exit(2)
+        });
+        eprintln!("Readit control socket: {}", path.display());
+        server
+    });
     let workspace = match Workspace::load(&root) {
         Ok(ws) => ws,
         Err(e) => {
@@ -46,7 +79,13 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
-                    let view = cx.new(|cx| ui::Reader::new(workspace, demo, window, cx));
+                    let view = cx.new(|cx| {
+                        let mut reader = ui::Reader::new(workspace, demo, window, cx);
+                        if let Some(server) = control {
+                            reader.attach_control(server, window, cx);
+                        }
+                        reader
+                    });
                     let weak = view.downgrade();
                     window.on_window_should_close(cx, move |window, cx| {
                         weak.update(cx, |view, cx| view.request_quit(window, cx))

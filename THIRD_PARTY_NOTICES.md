@@ -19,8 +19,8 @@ No GPL-licensed Zed editor/language/text/multi_buffer source is included.
 
 ## Syntax grammars and transitive dependencies
 
-`docs/dependency-inventory.tsv` records the 569 resolved dependencies (including
-build tools) for `aarch64-apple-darwin` and the selected features on 2026-09-07.
+`docs/dependency-inventory.tsv` records the 582 resolved dependencies (including
+build and test tools) for `aarch64-apple-darwin` and the selected features on 2026-09-08.
 Tree-sitter grammar versions and declared licenses are included in this inventory.
 `tree-sitter-graphql 0.1.0` uses `license-file` instead of an SPDX field; its bundled
 MIT license is copied to `third-party/TREE-SITTER-GRAPHQL-MIT.txt`.
@@ -58,3 +58,9 @@ Language servers run as local processes on demand. npm versions are pinned in
 These direct notices do not replace the complete distribution review of bundled
 server dependencies, Node.js, Rust toolchain components, and final application assets.
 The current development app refers to the repository's local server directory.
+
+## Local GPUI Component patch
+
+`vendor/gpui-component` contains gpui-component 0.5.1 under Apache-2.0.
+Readit exposes layout and selection methods for pointer navigation and MCP control.
+See `vendor/gpui-component/READIT-PATCH.md` and `LICENSE-APACHE`.

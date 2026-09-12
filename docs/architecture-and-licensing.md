@@ -78,20 +78,20 @@ MPLはファイル単位の条件であり、独自コードを含むアプリ�
 
 ```text
 GPUI desktop shell
-  ├─ Explorer / tabs / editor surface                 基本のIDE操作
-  ├─ reading route / evidence / questions / experiment 読むための機能
-  └─ Readit core                                      UIから分離
+  ├─ Explorer / tabs / editor surface              基本のIDE操作
+  ├─ definition / references / diff                読解のための表示
+  └─ Readit core
        ├─ workspace & Git snapshots
-       ├─ diff / anchors / reading state
-       ├─ parser & language-service adapters           今後
-       ├─ evidence-grounded explanation adapter        今後
-       └─ isolated experiment runner                   今後
+       ├─ parser & local language-service client
+       └─ control API (private Unix socket)
+                ↑
+          MCP stdio adapter ← 外部AIクライアント + 読解ガイドskill
 ```
 
-読みの記録は`path + revision/content + line/range + quote`に紐づける。
-行番号だけではAIの追加変更でずれるため、内容変更を検出して未確認に戻す。
-試作は全文一致による理解済み判定と、行の引用一致による疑問の陳腐化表示を実装した。
-安定したシンボルID、前後文脈、ASTによるアンカーの移動は次段階。
+説明は外部AIが生成し、会話またはソースに紐づく一時的な吹き出しに表示する。メモは外部エディターで扱う。ReaditはAIが操作できる通常のコード表示を提供する。
+MCPからは未保存の本文と現在の選択を取得し、ファイル・範囲・定義・参照を表示できる。
+要求にworkspaceを含め、本文変更やプロジェクト切替を検出して古い結果による誘導を避ける。
+旧メモデータの読み書き互換性は残すが、メモUIとAI説明UIは廃止した。
 
 Gitはシェル文字列を組み立てず、ローカルの`git`に個別引数を渡す。
 試作はHEAD対作業内容。最終製品ではAI作業開始時のsnapshotからの変更集合を第一級にする。

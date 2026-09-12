@@ -5,7 +5,7 @@ use gpui_component::menu::ContextMenuExt;
 use readit::{
     diff::{self, Kind, Row},
     language_service::{self as ls, Query, Service, Snapshot, Target},
-    workspace::{Document, Note, Workspace},
+    workspace::{Document, Workspace},
 };
 use std::{
     cell::RefCell,
@@ -21,6 +21,112 @@ const BORDER: u32 = 0x293340;
 const MUTED: u32 = 0x94a1b3;
 const TEXT: u32 = 0xdce3ed;
 const ACCENT: u32 = 0x9bd9bb;
+
+struct PointerPreview {
+    path: String,
+    cursor: usize,
+    range: std::ops::Range<usize>,
+    bounds: Bounds<Pixels>,
+    definition: bool,
+    targets: Vec<Target>,
+    information: String,
+    snapshot: Snapshot,
+    code: Option<Entity<InputState>>,
+}
+
+// Keep automatic placement outside the whole annotation, not just its first line.
+fn guide_placement(anchor: Bounds<Pixels>, viewport: Size<Pixels>, height: Pixels, manual: Option<Point<Pixels>>) -> (Point<Pixels>, Size<Pixels>) {
+    let margin = px(12.);
+    let width = px(430.).min((viewport.width - margin * 2.).max(px(1.)));
+    let height = height.min((viewport.height - margin * 2.).max(px(1.)));
+    let left = anchor.left().max(margin).min((viewport.width - width - margin).max(margin));
+    if let Some(position) = manual {
+        return (point(position.x.max(margin).min((viewport.width-width-margin).max(margin)),
+            position.y.max(margin).min((viewport.height-height-margin).max(margin))), size(width,height));
+    }
+    let above = (anchor.top() - margin - px(8.)).max(px(0.));
+    let below = (viewport.height - margin - anchor.bottom() - px(8.)).max(px(0.));
+    if below >= height || below >= above {
+        (point(left,anchor.bottom()+px(8.)),size(width,height.min(below)))
+    } else {
+        let height=height.min(above);
+        (point(left,anchor.top()-px(8.)-height),size(width,height))
+    }
+}
+
+#[derive(Clone)]
+struct Guide {
+    id: String,
+    root: PathBuf,
+    path: String,
+    source: String,
+    range: std::ops::Range<usize>,
+    title: String,
+    body: String,
+    question_open: bool,
+    pending_question: Option<u64>,
+    question: Option<String>,
+    answer: Option<String>,
+    question_error: Option<String>,
+    pending_next: Option<std::time::Instant>,
+    position: Option<Point<Pixels>>,
+    measured: Rc<RefCell<Option<(u64, Bounds<Pixels>)>>>,
+    drag: Option<(Point<Pixels>, Point<Pixels>)>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OverviewChapter {
+    title: String,
+    summary: String,
+    start_step: String,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuideOverview {
+    title: String,
+    summary: String,
+    // Plain text: roles, boundaries and the principal flow, written by the external agent.
+    relationships: String,
+    chapters: Vec<OverviewChapter>,
+}
+
+impl GuideOverview {
+    fn parse(value: &serde_json::Value, steps: &[Guide]) -> Result<Self, String> {
+        let overview: Self = serde_json::from_value(value.clone()).map_err(|e|e.to_string())?;
+        let valid = |s: &str, max| !s.trim().is_empty() && s.chars().count() <= max;
+        if !valid(&overview.title,100) || !valid(&overview.summary,2000) || !valid(&overview.relationships,4000)
+            || overview.chapters.is_empty() || overview.chapters.len()>16 {
+            return Err("overview requires title (100), summary (2000), relationships (4000), and 1..16 chapters".into());
+        }
+        let mut previous=None;
+        for chapter in &overview.chapters {
+            if !valid(&chapter.title,100) || !valid(&chapter.summary,1000) {return Err("invalid chapter text".into());}
+            let index=steps.iter().position(|g|g.id==chapter.start_step).ok_or("chapter start_step must name an existing step")?;
+            if previous.is_none() && index!=0 || previous.is_some_and(|p|index<=p) {return Err("chapters must partition all steps in reading order, starting at the first step".into());}
+            previous=Some(index);
+        }
+        Ok(overview)
+    }
+}
+
+struct GuideTour {
+    id: String,
+    steps: Vec<Guide>,
+    index: usize,
+    visited: usize,
+    overview: Option<GuideOverview>,
+    seen: BTreeSet<String>,
+}
+
+struct PinnedCode {
+    root: PathBuf,
+    path: String,
+    source: String,
+    line: u64,
+    input: Entity<InputState>,
+}
 
 struct Buffer {
     input: Entity<InputState>,
@@ -67,7 +173,23 @@ struct Pick {
 }
 
 pub struct Reader {
+    pinned: Option<PinnedCode>,
+    guide: Option<Guide>,
+    guide_tour: Option<GuideTour>,
+    overview_visible: bool,
+    overview_tab: bool,
+    guide_question: Entity<InputState>,
+    guide_events: Vec<serde_json::Value>,
+    guide_sequence: u64,
+    control: Option<readit::control::Server>,
+    control_task: Option<Task<()>>,
+    control_targets: Vec<Target>,
+    control_target_root: PathBuf,
     service: Arc<Mutex<Service>>,
+    pointer_preview: Option<PointerPreview>,
+    pointer_task: Option<Task<()>>,
+    pointer_serial: Arc<std::sync::atomic::AtomicU64>,
+    pointer_popup_bounds: Option<Bounds<Pixels>>,
     nav_serial: u64,
     nav_busy: bool,
     nav_visible: bool,
@@ -85,7 +207,6 @@ pub struct Reader {
     closed: Vec<String>,
     focus: FocusHandle,
     explorer_focus: FocusHandle,
-    note: Entity<InputState>,
     query: Entity<InputState>,
     replacement: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
@@ -96,14 +217,15 @@ pub struct Reader {
     rename_source: Option<String>,
     pick_index: usize,
     pick_scroll: ScrollHandle,
-    tree_scroll: ScrollHandle,
+    tree_scroll: UniformListScrollHandle,
     tab_scroll: ScrollHandle,
     collapsed: BTreeSet<String>,
     directories: Vec<String>,
     tree_target: Option<String>,
     reading_path: bool,
     sidebar: bool,
-    inspector: bool,
+    sidebar_width: f32,
+    sidebar_drag: Option<(Pixels, f32)>,
     wrap: bool,
     font_size: f32,
     compare: bool,
@@ -114,7 +236,7 @@ pub struct Reader {
     history_index: usize,
 }
 
-fn button(id: &'static str, label: impl Into<SharedString>) -> Stateful<Div> {
+fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     div()
         .id(id)
         .flex_shrink_0()
@@ -190,9 +312,11 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("references", "使用箇所を検索", "⇧F12"),
     ("symbols", "ファイル内のシンボルへ移動", "⇧⌘O"),
     ("hover", "型とドキュメントを表示", "⌘K ⌘I"),
+    ("pin-code", "現在のコードを横に固定", "⌘K ⌘P"),
+    ("unpin-code", "固定したコードを閉じる", ""),
+    ("definition-hover", "定義ホバープレビューを表示", ""),
     ("wrap", "折返し切替", "⌥Z"),
     ("sidebar", "ファイルツリー表示切替", "⌘B"),
-    ("inspector", "理解メモ表示切替", "⌥⌘B"),
     ("compare", "変更前と比較", "⌥⌘D"),
     ("reload", "ディスクから再読込", "⌘R"),
     ("reveal", "Finderで表示", ""),
@@ -209,7 +333,8 @@ impl Reader {
         let initial = workspace.documents.first().map(|d| d.path.clone());
         let directories = workspace.directories();
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("入力…"));
-        let note = cx.new(|cx| InputState::new(window, cx).placeholder("選択したコードへの疑問…"));
+        let guide_question =
+            cx.new(|cx| InputState::new(window, cx).placeholder("どの点が気になりますか？"));
         let replacement = cx.new(|cx| InputState::new(window, cx).placeholder("置換後の文字列"));
         let subscriptions = vec![cx.subscribe(&query, |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
@@ -218,7 +343,23 @@ impl Reader {
             }
         })];
         let mut this = Self {
+            pinned: None,
+            guide: None,
+            guide_tour: None,
+            overview_visible: false,
+            overview_tab: false,
+            guide_question,
+            guide_events: vec![],
+            guide_sequence: 0,
+            control: None,
+            control_task: None,
+            control_targets: vec![],
+            control_target_root: PathBuf::new(),
             service: Arc::new(Mutex::new(Service::default())),
+            pointer_preview: None,
+            pointer_task: None,
+            pointer_serial: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            pointer_popup_bounds: None,
             nav_serial: 0,
             nav_busy: false,
             nav_visible: false,
@@ -238,7 +379,6 @@ impl Reader {
             focus: cx.focus_handle(),
             explorer_focus: cx.focus_handle(),
             query,
-            note,
             replacement,
             _subscriptions: subscriptions,
             dialog: None,
@@ -248,13 +388,14 @@ impl Reader {
             rename_source: None,
             pick_index: 0,
             pick_scroll: ScrollHandle::new(),
-            tree_scroll: ScrollHandle::new(),
+            tree_scroll: UniformListScrollHandle::new(),
             tab_scroll: ScrollHandle::new(),
             collapsed: BTreeSet::new(),
             tree_target: None,
             reading_path: false,
             sidebar: true,
-            inspector: true,
+            sidebar_width: 245.,
+            sidebar_drag: None,
             wrap: false,
             font_size: 14.,
             compare: false,
@@ -294,6 +435,7 @@ impl Reader {
             .map(|e| e.read(cx).cursor_position())
             .unwrap_or(Position::new(0, 0))
     }
+    #[cfg_attr(feature = "performance", profiling::function)]
     fn sync_buffers(&mut self, cx: &App) {
         for (path, buffer) in &self.buffers {
             if let Some(i) = self.workspace.index_of(path) {
@@ -318,6 +460,8 @@ impl Reader {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.overview_visible = false;
+        self.clear_pointer(cx);
         let Some(index) = self.workspace.index_of(path) else {
             self.message = "ファイルが見つかりません".into();
             return;
@@ -344,6 +488,7 @@ impl Reader {
             let event_token = token.clone();
             let change = cx.subscribe(&input, move |this, input, event, cx| {
                 if matches!(event, InputEvent::Change) {
+                    this.clear_pointer(cx);
                     if let Some(i) = this.workspace.index_of(&event_token.borrow()) {
                         this.workspace.documents[i].text = input.read(cx).value().to_string();
                     }
@@ -353,7 +498,16 @@ impl Reader {
                     cx.notify();
                 }
             });
-            let selection = cx.observe(&input, |_, _, cx| cx.notify());
+            let selection = cx.observe(&input, |this, input, cx| {
+                if this
+                    .pointer_preview
+                    .as_ref()
+                    .is_some_and(|p| input.read(cx).cursor() != p.cursor)
+                {
+                    this.clear_pointer(cx);
+                }
+                cx.notify();
+            });
             self.buffers.insert(
                 path.into(),
                 Buffer {
@@ -408,6 +562,7 @@ impl Reader {
         cx.notify();
     }
     fn show(&mut self, dialog: Dialog, initial: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_pointer(cx);
         self.query.update(cx, |input, cx| {
             input.set_value(initial.to_string(), window, cx);
             input.focus(window, cx);
@@ -421,6 +576,8 @@ impl Reader {
         cx.notify();
     }
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.guide_response("end", cx);
+        self.clear_pointer(cx);
         if self.nav_busy {
             self.nav_serial += 1;
             self.nav_busy = false;
@@ -1122,10 +1279,30 @@ impl Reader {
             "implementation" => self.analyze(Query::Implementation, true, window, cx),
             "references" => self.analyze(Query::References, false, window, cx),
             "symbols" => self.analyze(Query::Symbols, false, window, cx),
+            "pin-code" => self.pin_current(window, cx),
+            "unpin-code" => {
+                self.pinned = None;
+                cx.notify();
+            }
+            "definition-hover" => {
+                if let Some(editor) = self.editor() {
+                    let input = editor.read(cx);
+                    let text = input.value();
+                    if let Some(range) = readit::hover::symbol_range(&text, input.cursor()) {
+                        let end =
+                            range.start + text[range.start..].chars().next().unwrap().len_utf8();
+                        if let Some(bounds) = input.range_to_bounds(&(range.start..end)) {
+                            let point = point(bounds.left() + px(1.), bounds.top() + px(1.));
+                            self.dialog = None;
+                            editor.update(cx, |input, cx| input.focus(window, cx));
+                            self.update_pointer(point, true, window, cx);
+                        }
+                    }
+                }
+            }
             "hover" => self.analyze(Query::Hover, false, window, cx),
             "wrap" => self.toggle_wrap(&ToggleWrap, window, cx),
             "sidebar" => self.sidebar = !self.sidebar,
-            "inspector" => self.inspector = !self.inspector,
             "compare" => self.toggle_compare(&Compare, window, cx),
             "reload" => self.begin(Pending::Reload, window, cx),
             "reveal" => {
@@ -1140,6 +1317,1430 @@ impl Reader {
         }
         cx.notify();
     }
+    fn clear_pointer(&mut self, cx: &mut Context<Self>) {
+        if self.pointer_preview.take().is_some() || self.pointer_task.is_some() {
+            self.pointer_serial
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.pointer_task = None;
+            self.pointer_popup_bounds = None;
+            cx.notify();
+        }
+    }
+
+    #[cfg_attr(feature = "performance", profiling::function)]
+    fn pointer_symbol(
+        &self,
+        point: Point<Pixels>,
+        cx: &App,
+    ) -> Option<(std::ops::Range<usize>, Bounds<Pixels>, ls::Position)> {
+        let editor = self.editor()?;
+        let input = editor.read(cx);
+        let text = input.value();
+        let offset = input.index_for_mouse_position(point);
+        // The layout hit test returns the nearest insertion point. Check both adjacent
+        // characters, then require actual glyph bounds so gutters/blank space never jump.
+        let previous = text
+            .get(..offset)?
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i);
+        for offset in std::iter::once(offset).chain(previous) {
+            let Some(range) = readit::hover::symbol_range(&text, offset) else {
+                continue;
+            };
+            let end = offset + text[offset..].chars().next()?.len_utf8();
+            let Some(glyph) = input.range_to_bounds(&(offset..end)) else {
+                continue;
+            };
+            if !glyph.contains(&point) {
+                continue;
+            }
+            let bounds = input
+                .range_to_bounds(&range)
+                .filter(|b| b.contains(&point))
+                .unwrap_or(glyph);
+            return Some((range, bounds, ls::position_at(&text, offset)));
+        }
+        None
+    }
+
+    #[cfg_attr(feature = "performance", profiling::function)]
+    fn update_pointer(
+        &mut self,
+        point: Point<Pixels>,
+        definition: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .pointer_popup_bounds
+            .is_some_and(|b| b.contains(&point))
+        {
+            return;
+        }
+        if self.compare || self.dialog.is_some() || self.pending.is_some() || self.nav_busy {
+            self.clear_pointer(cx);
+            return;
+        }
+        let Some(path) = self.selected.clone().filter(|p| {
+            !self.untitled.contains(p) && ls::language_id(&self.workspace.root.join(p)).is_some()
+        }) else {
+            self.clear_pointer(cx);
+            return;
+        };
+        let Some((range, bounds, position)) = self.pointer_symbol(point, cx) else {
+            self.clear_pointer(cx);
+            return;
+        };
+        if self.pointer_preview.as_ref().is_some_and(|p| {
+            p.path == path && p.range == range && p.definition == definition && p.bounds == bounds
+        }) {
+            return;
+        }
+        self.clear_pointer(cx);
+        self.sync_buffers(cx);
+        let snapshot = Snapshot {
+            root: self.workspace.root.clone(),
+            path: self.workspace.root.join(&path),
+            position,
+            documents: self
+                .workspace
+                .documents
+                .iter()
+                .filter(|d| !self.untitled.contains(&d.path))
+                .map(|d| (self.workspace.root.join(&d.path), d.text.clone()))
+                .collect(),
+        };
+        self.pointer_preview = Some(PointerPreview {
+            cursor: self.editor().unwrap().read(cx).cursor(),
+            path,
+            range,
+            bounds,
+            definition,
+            targets: vec![],
+            information: String::new(),
+            snapshot: snapshot.clone(),
+            code: None,
+        });
+        let serial_counter = self.pointer_serial.clone();
+        let serial = serial_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let service = self.service.clone();
+        self.pointer_task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(250))
+                .await;
+            let (sender, receiver) = futures_channel::oneshot::channel();
+            let request = snapshot.clone();
+            std::thread::spawn(move || {
+                let Ok(mut service) = service.lock() else {
+                    return;
+                };
+                if serial_counter.load(std::sync::atomic::Ordering::Relaxed) != serial {
+                    return;
+                }
+                let mut targets = vec![];
+                if definition {
+                    if let Ok(answer) = service.query(Query::Definition, request.clone()) {
+                        targets = answer.targets;
+                    }
+                }
+                if serial_counter.load(std::sync::atomic::Ordering::Relaxed) != serial {
+                    return;
+                }
+                let information = service
+                    .query(Query::Hover, request)
+                    .map(|a| a.information)
+                    .unwrap_or_default();
+                let _ = sender.send((targets, information));
+            });
+            let Ok((targets, information)) = receiver.await else {
+                return;
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this
+                    .pointer_serial
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    != serial
+                {
+                    return;
+                }
+                this.sync_buffers(cx);
+                if !this.snapshot_current(&snapshot)
+                    || this.selected.as_ref().map(|p| this.workspace.root.join(p))
+                        != Some(snapshot.path.clone())
+                    || this.compare
+                    || this.dialog.is_some()
+                    || this.pending.is_some()
+                {
+                    this.clear_pointer(cx);
+                    return;
+                }
+                let code = targets.first().map(|target| {
+                    let snippet = target
+                        .preview
+                        .lines()
+                        .map(|line| line.get(5..).unwrap_or(line))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    cx.new(|cx| {
+                        InputState::new(window, cx)
+                            .code_editor(language(&target.path.to_string_lossy()))
+                            .line_number(false)
+                            .soft_wrap(false)
+                            .default_value(snippet)
+                    })
+                });
+                if let Some(preview) = &mut this.pointer_preview {
+                    preview.code = code;
+                    preview.targets = targets;
+                    preview.information = information;
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    fn jump_pointer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(preview) = self.pointer_preview.take() else {
+            return;
+        };
+        self.clear_pointer(cx);
+        self.sync_buffers(cx);
+        if !self.snapshot_current(&preview.snapshot) {
+            return;
+        }
+        self.nav_targets = preview.targets;
+        self.nav_snapshot = Some(preview.snapshot);
+        self.nav_title = "定義".into();
+        if self.nav_targets.len() == 1 {
+            self.jump_target(0, window, cx);
+        } else if !self.nav_targets.is_empty() {
+            self.show(Dialog::Navigation, "", window, cx);
+        }
+    }
+
+    fn pointer_overlay(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        self.pointer_popup_bounds = None;
+        let Some(preview) = &self.pointer_preview else {
+            return div().into_any_element();
+        };
+        if preview.information.is_empty() && preview.targets.is_empty() {
+            return div().into_any_element();
+        }
+        let viewport = window.viewport_size();
+        let width = px(610.).min(viewport.width - px(20.));
+        let left = preview
+            .bounds
+            .left()
+            .max(px(10.))
+            .min(viewport.width - width - px(10.));
+        let lines = preview.information.lines().count().max(1);
+        let desired = if preview.definition && !preview.targets.is_empty() {
+            350.
+        } else {
+            (lines as f32 * 18. + 32.).clamp(70., 240.)
+        };
+        let height = px(desired).min(viewport.height - px(40.));
+        let top = if preview.bounds.bottom() + height < viewport.height - px(20.) {
+            preview.bounds.bottom()
+        } else {
+            (preview.bounds.top() - height).max(px(10.))
+        };
+        let popup = Bounds::new(point(left, top), size(width, height));
+        self.pointer_popup_bounds = Some(popup);
+        let has_definition = preview.definition && !preview.targets.is_empty();
+        let mut content = div()
+            .id("pointer-preview-content")
+            .size_full()
+            .overflow_y_scroll()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .id("pointer-type-information")
+                    .max_h(px(105.))
+                    .overflow_y_scroll()
+                    .flex_shrink_0()
+                    .font_family("Menlo")
+                    .text_size(px(12.))
+                    .child(preview.information.clone()),
+            );
+        if has_definition {
+            let target = &preview.targets[0];
+            content = content
+                .child(
+                    div()
+                        .border_t_1()
+                        .border_color(rgb(BORDER))
+                        .pt_2()
+                        .child(caption(format!(
+                            "{}:{}",
+                            target.path.display(),
+                            target.start.line + 1
+                        ))),
+                )
+                .when_some(preview.code.as_ref(), |content, code| {
+                    content.child(
+                        div().h(px(180.)).flex_shrink_0().child(
+                            Input::new(code)
+                                .disabled(true)
+                                .h_full()
+                                .appearance(false)
+                                .bordered(false)
+                                .font_family("Menlo")
+                                .text_size(px(12.)),
+                        ),
+                    )
+                })
+                .child(
+                    button(
+                        "pointer-jump",
+                        if preview.targets.len() == 1 {
+                            "定義へ移動  ⌘クリック".to_string()
+                        } else {
+                            format!("{}件の定義を表示", preview.targets.len())
+                        },
+                    )
+                    .on_click(cx.listener(|this, _, w, cx| this.jump_pointer(w, cx))),
+                );
+        }
+        let bounds = preview.bounds;
+        div()
+            .absolute()
+            .inset_0()
+            .when(has_definition, |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .left(bounds.left())
+                        .top(bounds.top())
+                        .w(bounds.size.width)
+                        .h(bounds.size.height)
+                        .border_b_1()
+                        .border_color(rgb(0x66b5ff))
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, |event, _, cx| {
+                            if event.modifiers.secondary() {
+                                cx.stop_propagation();
+                            }
+                        })
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseUpEvent, w, cx| {
+                                if event.modifiers.secondary() {
+                                    this.jump_pointer(w, cx);
+                                    cx.stop_propagation();
+                                }
+                            }),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .id("pointer-preview")
+                    .absolute()
+                    .left(left)
+                    .top(top)
+                    .w(width)
+                    .h(height)
+                    .bg(rgb(PANEL))
+                    .border_1()
+                    .border_color(rgb(0x536476))
+                    .rounded_md()
+                    .shadow_lg()
+                    .occlude()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(content),
+            )
+            .into_any_element()
+    }
+
+    fn pin_code(
+        &mut self,
+        path: String,
+        line: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        self.sync_buffers(cx);
+        let source = self.control_text(&path)?;
+        let offset = readit::control::offset_at(&source, line, 1)?;
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor(language(&path))
+                .soft_wrap(false)
+                .default_value(source.clone())
+        });
+        self.pinned = Some(PinnedCode {
+            root: self.workspace.root.clone(),
+            path,
+            source,
+            line,
+            input: input.clone(),
+        });
+        let previous_focus = window.focused(cx);
+        input.update(cx, |input, cx| {
+            input.set_cursor_position(Position::new((line - 1) as u32, 0), window, cx);
+            input.reveal_offset(offset, cx);
+        });
+        if let Some(focus) = previous_focus {
+            focus.focus(window);
+        }
+        cx.notify();
+        Ok(())
+    }
+
+    fn pin_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = self.selected.clone() {
+            if let Err(error) = self.pin_code(path, self.position(cx).line as u64 + 1, window, cx) {
+                self.message = error;
+                cx.notify();
+            }
+        }
+    }
+
+    fn pinned_changed(&self, cx: &App) -> bool {
+        self.pinned.as_ref().is_some_and(|p| {
+            if let Some(buffer) = self.buffers.get(&p.path) {
+                buffer.input.read(cx).value().as_str() != p.source
+            } else {
+                self.workspace
+                    .index_of(&p.path)
+                    .is_some_and(|i| self.workspace.documents[i].text != p.source)
+            }
+        })
+    }
+
+    fn pinned_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(pinned) = &self.pinned else {
+            return div().into_any_element();
+        };
+        let full = pinned
+            .root
+            .join(&pinned.path)
+            .to_string_lossy()
+            .into_owned();
+        div()
+            .w(relative(0.42))
+            .min_w(px(240.))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .border_l_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(BG))
+            .child(
+                div()
+                    .h(px(38.))
+                    .flex_shrink_0()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(caption("固定したコード · 閲覧専用"))
+                    .child(
+                        button("unpin-code", "×").on_click(cx.listener(|this, _, _, cx| {
+                            this.pinned = None;
+                            cx.notify();
+                        })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("pinned-path")
+                    .px_3()
+                    .py_2()
+                    .flex_shrink_0()
+                    .overflow_x_scroll()
+                    .child(caption(full).whitespace_nowrap()),
+            )
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .flex_shrink_0()
+                    .flex()
+                    .gap_2()
+                    .items_center()
+                    .child(caption(if self.pinned_changed(cx) {
+                        "本文に変更あり · 固定時の内容を表示中"
+                    } else {
+                        "固定時の内容を表示中"
+                    }))
+                    .child(button("refresh-pinned", "更新").on_click(cx.listener(
+                        |this, _, w, cx| {
+                            if let Some(p) = &this.pinned {
+                                let path = p.path.clone();
+                                let line = p.line;
+                                if let Err(error) = this.pin_code(path, line, w, cx) {
+                                    this.message = error;
+                                    cx.notify();
+                                }
+                            }
+                        },
+                    ))),
+            )
+            .child(
+                div().flex_1().min_h_0().overflow_hidden().child(
+                    Input::new(&pinned.input)
+                        .disabled(true)
+                        .h_full()
+                        .appearance(false)
+                        .bordered(false)
+                        .font_family("Menlo")
+                        .text_size(px(self.font_size)),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn show_overview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog.is_some() || self.pending.is_some() {return;}
+        if self.guide_tour.as_ref().is_some_and(|t|t.overview.is_some()) {
+            self.overview_visible=true; self.overview_tab=true;
+            self.clear_pointer(cx); self.focus.focus(window); cx.notify();
+        }
+    }
+
+    #[cfg_attr(feature = "performance", profiling::function)]
+    fn overview_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(tour)=&self.guide_tour else {return div().into_any_element();};
+        let Some(overview)=&tour.overview else {return div().into_any_element();};
+        let stale=tour.steps.iter().any(|g| {
+            if let Some(buffer)=self.buffers.get(&g.path) {buffer.input.read(cx).value().as_str()!=g.source}
+            else {self.workspace.index_of(&g.path).is_none_or(|i|self.workspace.documents[i].text!=g.source)}
+        });
+        div().id("reading-overview").flex_1().min_h_0().overflow_y_scroll().p_5()
+            .child(div().max_w(px(900.)).flex().flex_col().gap_4()
+                .child(caption("全体像 → 章の概要 → 実際のコード"))
+                .child(div().text_2xl().font_weight(FontWeight::BOLD).child(overview.title.clone()))
+                .child(div().text_size(px(15.)).child(overview.summary.clone()))
+                .when(stale,|panel|panel.child(div().p_3().bg(rgb(0x483529)).child("コードに変更があります。外部AIに概観とガイドの更新を依頼してください。")))
+                .child(div().p_4().bg(rgb(PANEL)).rounded_lg().flex().flex_col().gap_2()
+                    .child(div().font_weight(FontWeight::BOLD).child("構成と処理の流れ"))
+                    .children(overview.relationships.lines().map(|line|div().child(line.to_owned()))))
+                .child(div().font_weight(FontWeight::BOLD).child("読む章"))
+                .children(overview.chapters.iter().enumerate().map(|(i,chapter)| {
+                    let start=tour.steps.iter().position(|g|g.id==chapter.start_step).unwrap();
+                    let end=overview.chapters.get(i+1).and_then(|c|tour.steps.iter().position(|g|g.id==c.start_step)).unwrap_or(tour.steps.len());
+                    let seen=tour.steps[start..end].iter().filter(|g|tour.seen.contains(&g.id)).count();
+                    let current=tour.index>=start && tour.index<end && !tour.seen.is_empty();
+                    div().id(("overview-chapter",i)).p_4().rounded_lg().border_1().border_color(rgb(if current {ACCENT}else{BORDER})).bg(rgb(PANEL)).flex().flex_col().gap_2()
+                        .child(div().flex().justify_between().gap_3()
+                            .child(div().font_weight(FontWeight::BOLD).child(format!("{:02}  {}",i+1,chapter.title)))
+                            .child(caption(format!("{} / {} 箇所を表示済み{}",seen,end-start,if current {" · 現在の章"}else{""}))))
+                        .child(chapter.summary.clone())
+                        .child(caption(tour.steps[start..end].iter().map(|g|self.workspace.root.join(&g.path).to_string_lossy().into_owned()).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>().join("\n")))
+                        .when(!stale,|card|card.child(button(("chapter-open",i),"コードを読む →").on_click(cx.listener(move |this,_,w,cx| {
+                            if let Some(t)=&this.guide_tour {let delta=start as i32-t.index as i32;this.guide_step(delta,w,cx);}
+                        }))))
+                }))
+                .child(caption("解説は外部AIが事前に作成します。章の移動は待機なしで利用できます。")))
+            .into_any_element()
+    }
+
+    fn prepare_guide(&self, args: &serde_json::Value) -> Result<Guide,String> {
+                let field = |name: &str, max: usize| -> Result<String, String> {
+                    let text = args
+                        .get(name)
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| format!("{name} is required"))?;
+                    if text.trim().is_empty() || text.chars().count() > max {
+                        return Err(format!("{name} must contain 1..{max} characters"));
+                    }
+                    Ok(text.to_string())
+                };
+                let id = field("id", 128)?;
+                let title = field("title", 100)?;
+                let body = field("body", 2000)?;
+                let expected = field("expected_text", 16000)?;
+                let path = self.control_path(args.get("path").and_then(|v|v.as_str()).ok_or("path is required")?)?;
+                let source = self.control_text(&path)?;
+                let line = args.get("line").and_then(|v|v.as_u64()).ok_or("line is required")?;
+                let column = args.get("column").and_then(|v|v.as_u64()).ok_or("column is required")?;
+                let start = readit::control::offset_at(&source, line, column)?;
+                let end = start.checked_add(expected.len()).ok_or("invalid range")?;
+                if source.get(start..end) != Some(expected.as_str()) {
+                    return Err("source changed or expected_text does not match".into());
+                }
+                Ok(Guide {
+                    id,
+                    root: self.workspace.root.clone(),
+                    path,
+                    source,
+                    range: start..end,
+                    title,
+                    body,
+                    question_open: false,
+                    pending_question: None,
+                    question: None,
+                    answer: None,
+                    question_error: None,
+                    pending_next: None,
+                    position: None,
+                    measured: Rc::new(RefCell::new(None)),
+                    drag: None,
+                })
+    }
+
+    #[cfg_attr(feature = "performance", profiling::function)]
+    fn activate_guide(&mut self, guide: Guide, window: &mut Window, cx: &mut Context<Self>) -> Result<(),String> {
+        if self.dialog.is_some() || self.pending.is_some() { return Err("finish the editor dialog first".into()); }
+        if self.workspace.root!=guide.root || self.control_text(&guide.path)?!=guide.source {
+            return Err("source changed; regenerate the guide before navigating".into());
+        }
+        let start=ls::position_at(&guide.source,guide.range.start);
+        let end=ls::position_at(&guide.source,guide.range.end);
+        let previous=self.guide.take();
+        if let Err(error)=self.control_call(&readit::control::Call{method:"readit_open".into(),arguments:serde_json::json!({"workspace":self.workspace.root,"path":guide.path,"line":start.line+1,"column":start.character+1,"end_line":end.line+1,"end_column":end.character+1})},window,cx) {
+            self.guide=previous;return Err(error);
+        }
+        let offset=guide.range.start;
+        if let Some(editor)=self.editor() {
+            window.on_next_frame(move |_,cx|editor.update(cx,|input,cx|input.reveal_at_top(offset,cx)));
+        }
+        self.overview_visible=false;
+        self.compare=false;
+        self.clear_pointer(cx);
+        self.guide=Some(guide);
+        self.guide_question.update(cx,|input,cx|input.set_value("",window,cx));
+        cx.notify();
+        Ok(())
+    }
+
+    #[cfg_attr(feature = "performance", profiling::function)]
+    fn guide_step(&mut self, direction: i32, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_buffers(cx);
+        self.validate_guide(cx);
+        let Some(tour)=self.guide_tour.as_ref() else { self.guide_response("next",cx);return; };
+        if self.guide.as_ref().is_some_and(|g|g.question_open) {return;}
+        let next=tour.index as i32+direction;
+        if next<0 {return;}
+        if next as usize>=tour.steps.len() {self.guide_response("end",cx);return;}
+        let target=tour.steps[next as usize].clone();
+        let previous=self.guide.clone();
+        if let Err(error)=self.activate_guide(target,window,cx) {
+            self.message=error.clone();
+            if let Some(guide)=self.guide.as_mut(){guide.question_error=Some(error);}
+            cx.notify();return;
+        }
+        let tour=self.guide_tour.as_mut().unwrap();
+        if let Some(previous)=previous {tour.steps[tour.index]=previous;}
+        tour.index=next as usize;
+        tour.visited=tour.visited.max(tour.index);
+        tour.seen.insert(tour.steps[tour.index].id.clone());
+        self.guide_sequence+=1;
+        self.guide_events.push(serde_json::json!({"sequence":self.guide_sequence,"action":"step","tour_id":tour.id,"index":tour.index,"id":tour.steps[tour.index].id}));
+        if self.guide_events.len()>128 {self.guide_events.remove(0);}
+        cx.notify();
+    }
+
+    fn prepare_steps(&self,args:&serde_json::Value, allow_empty:bool)->Result<Vec<Guide>,String>{
+        let steps=args.get("steps").and_then(|v|v.as_array()).ok_or("steps must be an array")?;
+        if steps.len()>32 || (!allow_empty && steps.is_empty()) {return Err("provide 1..32 steps".into());}
+        let prepared=steps.iter().map(|s|self.prepare_guide(s)).collect::<Result<Vec<_>,_>>()?;
+        let mut ids=BTreeSet::new();
+        for step in &prepared {if !ids.insert(&step.id){return Err("step ids must be unique".into());}}
+        Ok(prepared)
+    }
+
+    fn guide_response(&mut self, action: &str, cx: &mut Context<Self>) {
+        if action == "next" && self.guide.as_ref().is_some_and(|g|
+            g.pending_next.is_some() || g.pending_question.is_some() || g.question_open) {
+            return;
+        }
+        let retain = action != "cleared" && self.guide_tour.as_ref().is_some_and(|t|t.overview.is_some() && t.steps[0].root==self.workspace.root);
+        if action != "next" && !retain { self.guide_tour = None; self.overview_visible=false; self.overview_tab=false; }
+        if retain { if let (Some(tour),Some(guide))=(&mut self.guide_tour,&self.guide) {tour.steps[tour.index]=guide.clone();} }
+        if let Some(mut guide) = self.guide.take() {
+            self.guide_sequence += 1;
+            self.guide_events.push(serde_json::json!({"sequence":self.guide_sequence,
+                "id":guide.id,"action":action,"workspace":guide.root,"path":guide.root.join(&guide.path)}));
+            if self.guide_events.len() > 128 {
+                self.guide_events.remove(0);
+            }
+            if action == "next" {
+                guide.pending_next = Some(std::time::Instant::now());
+                guide.drag = None;
+                self.guide = Some(guide);
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_secs(10)).await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }).detach();
+            }
+            cx.notify();
+        }
+    }
+
+    fn open_guide_question(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(guide) = self.guide.as_mut() else {
+            return;
+        };
+        if guide.pending_question.is_some() || guide.pending_next.is_some() {
+            return;
+        }
+        guide.question_open = true;
+        guide.question_error = None;
+        self.guide_question
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    fn submit_guide_question(&mut self, cx: &mut Context<Self>) {
+        self.validate_guide(cx);
+        let Some(guide) = self.guide.as_mut() else {
+            return;
+        };
+        if !guide.question_open || guide.pending_question.is_some() {
+            return;
+        }
+        let question = self.guide_question.read(cx).value().trim().to_string();
+        if question.is_empty() || question.chars().count() > 2000 {
+            guide.question_error = Some("質問を1〜2,000文字で入力してください。".into());
+            cx.notify();
+            return;
+        }
+        self.guide_sequence += 1;
+        let start = ls::position_at(&guide.source, guide.range.start);
+        let end = ls::position_at(&guide.source, guide.range.end);
+        self.guide_events.push(serde_json::json!({"sequence":self.guide_sequence,
+            "id":guide.id,"action":"question","question":question,
+            "workspace":guide.root,"path":guide.root.join(&guide.path),
+            "line":start.line+1,"column":start.character+1,"end_line":end.line+1,"end_column":end.character+1,
+            "expected_text":guide.source.get(guide.range.clone()),"title":guide.title,
+            "explanation":guide.body,"previous_question":guide.question,"previous_answer":guide.answer}));
+        if self.guide_events.len() > 128 {
+            self.guide_events.remove(0);
+        }
+        guide.pending_question = Some(self.guide_sequence);
+        guide.question = Some(question);
+        guide.answer = None;
+        guide.question_open = false;
+        guide.question_error = None;
+        cx.notify();
+    }
+
+    fn validate_guide(&mut self, cx: &mut Context<Self>) {
+        if self.guide_tour.as_ref().is_some_and(|t|t.steps[0].root!=self.workspace.root) {
+            self.guide_tour=None; self.overview_visible=false; self.overview_tab=false;
+        }
+        let invalid = self.guide.as_ref().is_some_and(|guide| {
+            self.workspace.root != guide.root
+                || self.selected.as_ref() != Some(&guide.path)
+                || self
+                    .editor()
+                    .is_none_or(|editor| editor.read(cx).value().as_str() != guide.source)
+        });
+        if invalid {
+            self.guide_response("interrupted", cx);
+        }
+    }
+
+    #[cfg_attr(feature = "performance", profiling::function)]
+    fn guide_overlay(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(guide) = &self.guide else {
+            return div().into_any_element();
+        };
+        let Some(editor) = self.editor() else {
+            return div().into_any_element();
+        };
+        let input = editor.read(cx);
+        let anchor = input.visible_range().and_then(|visible| {
+            let start = guide.range.start.max(visible.start);
+            let end = guide.range.end.min(visible.end);
+            if start >= end { return None; }
+            let last = guide.source[start..end].char_indices().last().map(|(i,_)|start+i).unwrap_or(start);
+            let first_bounds = input.range_to_bounds(&(start..start))?;
+            let last_bounds = input.range_to_bounds(&(last..last))?;
+            Some(Bounds::from_corners(
+                point(first_bounds.left().min(last_bounds.left()), first_bounds.top().min(last_bounds.top())),
+                point(first_bounds.right().max(last_bounds.right()), first_bounds.bottom().max(last_bounds.bottom())),
+            ))
+        });
+        // A manually placed bubble belongs to the viewport, including while its
+        // code is offscreen. Automatic bubbles only follow visible source.
+        if anchor.is_none() && guide.position.is_none() { return div().into_any_element(); }
+        let viewport = window.viewport_size();
+        let anchor = anchor.unwrap_or_else(|| Bounds::new(point(px(12.),px(12.)),size(px(1.),px(1.))));
+        use std::hash::{Hash, Hasher};
+        let mut hash=std::collections::hash_map::DefaultHasher::new();
+        (&guide.title,&guide.body,&guide.question,&guide.answer,guide.question_open,&guide.question_error,guide.pending_question.is_some(),guide.pending_next.is_some()).hash(&mut hash);
+        f32::from(viewport.width).to_bits().hash(&mut hash);
+        let layout_key=hash.finish();
+        let measured=guide.measured.borrow().filter(|(key,_)|*key==layout_key).map(|(_,bounds)|bounds);
+        let preferred_height=measured.map(|b|b.size.height).unwrap_or((viewport.height-px(200.)).max(px(80.)));
+        let (origin, bubble_size)=guide_placement(anchor,viewport,preferred_height,guide.position);
+        let measurement=guide.measured.clone();
+        let reader=cx.entity().downgrade();
+        let left = origin.x;
+        let top = origin.y;
+        let width = bubble_size.width;
+        div()
+            .absolute()
+            .left(left)
+            .top(top)
+            .w(width)
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .bg(rgb(PANEL))
+            .border_1()
+            .border_color(rgb(ACCENT))
+            .rounded_lg()
+            .shadow_lg()
+            .id("reading-guide")
+            .debug_selector(|| "reading-guide".into())
+            .on_mouse_move(|event: &MouseMoveEvent, _, cx| {
+                if event.pressed_button.is_none() { cx.stop_propagation(); }
+            })
+            .max_h(if guide.position.is_some() {
+                (viewport.height-px(24.)).max(px(1.))
+            } else if origin.y >= anchor.bottom() {
+                (viewport.height-anchor.bottom()-px(20.)).max(px(1.))
+            } else {
+                (anchor.top()-px(20.)).max(px(1.))
+            })
+            .child(canvas(move |bounds,window,_| {
+                let changed=measurement.borrow().as_ref().is_none_or(|(key,old)|*key!=layout_key || old.size!=bounds.size);
+                *measurement.borrow_mut()=Some((layout_key,bounds));
+                if changed {let reader=reader.clone();window.on_next_frame(move |_,cx|{let _=reader.update(cx,|_,cx|cx.notify());});}
+            },|_,_,_,_|{}).absolute().inset_0())
+            .overflow_y_scroll()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+             .child(div().id("guide-drag-handle").debug_selector(|| "guide-drag-handle".into()).cursor_move().flex_shrink_0()
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.clear_pointer(cx);
+                    if let Some(guide) = this.guide.as_mut() {
+                        let origin=guide.measured.borrow().map(|(_,bounds)|bounds.origin).unwrap_or(origin);
+                        guide.position=Some(origin);
+                        guide.drag = Some((event.position, origin));
+                    }
+                    cx.stop_propagation();
+                }))
+                .child(caption(format!("{}{} · ドラッグで移動", self.guide_tour.as_ref().map(|t|format!("{}/{} · ",t.index+1,t.steps.len())).unwrap_or_default(), guide.title))))
+            .child(
+                div()
+                    .id("reading-guide-body")
+                    .flex_shrink_0()
+                    .child(guide.body.clone()),
+            )
+            .when(!guide.question_open, |bubble| bubble.when_some(guide.question_error.as_ref(), |bubble,error|bubble.child(caption(error.clone()))))
+            .when_some(guide.question.as_ref(), |bubble, question| {
+                bubble.child(
+                    div()
+                        .text_color(rgb(ACCENT))
+                        .child(format!("質問: {question}")),
+                )
+            })
+            .when_some(self.guide_tour.as_ref().and_then(|t|t.overview.as_ref().and_then(|o|o.chapters.iter().rev().find(|c|t.steps.iter().position(|g|g.id==c.start_step).is_some_and(|i|i<=t.index)))).map(|c|c.title.clone()), |bubble,title|bubble.child(caption(format!("章: {title}"))))
+            .when_some(guide.pending_next, |bubble, started| {
+                bubble.child(caption(if started.elapsed().as_secs() >= 10 {
+                    "応答が届いていません。AI側でガイドを再開してください。"
+                } else { "次の解説を待っています…" }))
+            })
+            .when(guide.pending_question.is_some(), |bubble| {
+                bubble.child(caption("回答を待っています…"))
+            })
+            .when_some(guide.answer.as_ref(), |bubble, answer| {
+                bubble.child(
+                    div()
+                        .id("guide-answer")
+                        .flex_shrink_0()
+                        .child(answer.clone()),
+                )
+            })
+            .when(guide.question_open, |bubble| {
+                bubble
+                    .child(Input::new(&self.guide_question))
+                    .when_some(guide.question_error.as_ref(), |bubble, error| {
+                        bubble.child(caption(error.clone()))
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(button("guide-question-send", "送信").on_click(
+                                cx.listener(|this, _, _, cx| this.submit_guide_question(cx)),
+                            ))
+                            .child(button("guide-question-cancel", "キャンセル").on_click(
+                                cx.listener(|this, _, w, cx| {
+                                    if let Some(guide) = this.guide.as_mut() {
+                                        guide.question_open = false;
+                                        guide.question_error = None;
+                                    }
+                                    if let Some(editor) = this.editor() {
+                                        editor.update(cx, |input, cx| input.focus(w, cx));
+                                    }
+                                    cx.notify();
+                                }),
+                            )),
+                    )
+            })
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .when(self.guide_tour.as_ref().is_some_and(|t|t.overview.is_some()), |row|row.child(button("bubble-overview","概観").on_click(cx.listener(|this,_,w,cx|this.show_overview(w,cx)))))
+                    .when(self.guide_tour.as_ref().is_some_and(|t|t.index>0), |row| row.child(
+                        button("guide-back", "戻る").on_click(cx.listener(|this,_,w,cx|this.guide_step(-1,w,cx)))))
+                    .child(
+                        button("guide-next", if self.guide_tour.as_ref().is_some_and(|t|t.index+1==t.steps.len()) { "完了" } else if guide.pending_next.is_some() { "待機中…" } else { "次へ" }).on_click(
+                            cx.listener(|this, _, w, cx| this.guide_step(1, w, cx)),
+                        ),
+                    )
+                    .child(
+                        button(
+                            "guide-question",
+                            if guide.question.is_some() {
+                                "追加で質問"
+                            } else {
+                                "質問"
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, w, cx| this.open_guide_question(w, cx))),
+                    )
+                    .child(
+                        button("guide-end", "終了")
+                            .on_click(cx.listener(|this, _, _, cx| this.guide_response("end", cx))),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    pub fn attach_control(
+        &mut self,
+        server: readit::control::Server,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.control = Some(server);
+        self.control_task = Some(cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(30))
+                    .await;
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        for _ in 0..4 {
+                            let request = this
+                                .control
+                                .as_ref()
+                                .and_then(|s| s.requests.try_recv().ok());
+                            let Some(request) = request else {
+                                break;
+                            };
+                            if !request.is_live() {
+                                continue;
+                            }
+                            if request.call.method == "readit_symbol" {
+                                this.control_symbol(request, window, cx);
+                            } else {
+                                let result = this.control_call(&request.call, window, cx);
+                                let _ = request.reply.send(result);
+                            }
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
+    }
+    fn control_scope(&self, arguments: &serde_json::Value) -> Result<(), String> {
+        if arguments.get("workspace").and_then(|v| v.as_str()) != self.workspace.root.to_str() {
+            return Err("workspace changed or does not match; call readit_state first".into());
+        }
+        Ok(())
+    }
+    fn control_path(&self, value: &str) -> Result<String, String> {
+        let absolute = self.workspace.root.join(value);
+        let key = absolute
+            .strip_prefix(&self.workspace.root)
+            .unwrap_or(&absolute)
+            .to_string_lossy()
+            .into_owned();
+        if self.workspace.index_of(&key).is_some() {
+            return Ok(key);
+        }
+        if self.control_target_root == self.workspace.root
+            && self.control_targets.iter().any(|t| t.path == absolute)
+        {
+            return Ok(absolute.to_string_lossy().into_owned());
+        }
+        Err("path is not a workspace file or a definition returned by this editor".into())
+    }
+    fn control_text(&self, path: &str) -> Result<String, String> {
+        if let Some(index) = self.workspace.index_of(path) {
+            return Ok(self.workspace.documents[index].text.clone());
+        }
+        let path = self.workspace.root.join(path);
+        if !path.is_file()
+            || std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 1024 * 1024
+        {
+            return Err("external definition is not a supported text file".into());
+        }
+        std::fs::read_to_string(path).map_err(|e| e.to_string())
+    }
+    fn control_state(&mut self, cx: &mut Context<Self>) -> serde_json::Value {
+        use serde_json::json;
+        self.sync_buffers(cx);
+        self.validate_guide(cx);
+        let selection=self.editor().map(|editor| {
+            let input=editor.read(cx); let text=input.value(); let range=input.selection_range();
+            let start=ls::position_at(&text,range.start); let end=ls::position_at(&text,range.end);
+            let viewport=input.visible_range().map(|r|json!({"start_line":ls::position_at(&text,r.start).line+1,"end_line":ls::position_at(&text,r.end.min(text.len())).line+1}));
+            json!({"start_line":start.line+1,"start_column":start.character+1,"end_line":end.line+1,"end_column":end.character+1,
+                "text":text.get(range.clone()).unwrap_or("").chars().take(16000).collect::<String>(),"truncated":text.get(range.clone()).unwrap_or("").chars().count()>16000,"viewport":viewport})
+        });
+        let pos = self.position(cx);
+        json!({"workspace":self.workspace.root,"active_path":self.selected.as_ref().map(|p|self.workspace.root.join(p)),
+            "cursor":{"line":pos.line+1,"column":pos.character+1},"selection":selection,
+            "tabs":self.tabs.iter().map(|p|json!({"path":self.workspace.root.join(p),"dirty":self.workspace.index_of(p).is_some_and(|i|self.workspace.documents[i].dirty()),"read_only":self.external.contains(p)})).collect::<Vec<_>>(),
+            "view":{"diff":self.compare,"file_tree":self.sidebar,"file_tree_width":self.sidebar_width,"wrap":self.wrap},
+            "pinned":self.pinned.as_ref().map(|p|json!({"path":p.root.join(&p.path),"line":p.line,"source_changed":self.pinned_changed(cx),"read_only":true})),
+            "guide":self.guide.as_ref().map(|g|json!({"id":g.id,"title":g.title,"question_open":g.question_open,"question":g.question,"pending_question":g.pending_question,"answer":g.answer,"pending_next":g.pending_next.is_some()})),"guide_event_sequence":self.guide_sequence,
+            "overview_visible":self.overview_visible,
+            "guide_tour":self.guide_tour.as_ref().map(|t|json!({"id":t.id,"index":t.index,"total":t.steps.len(),"visited_through":t.visited,"overview":t.overview,"seen_steps":t.seen,"steps":t.steps.iter().map(|g|json!({"id":g.id,"title":g.title})).collect::<Vec<_>>()})),
+            "busy":self.nav_busy,"dialog_open":self.dialog.is_some()||self.pending.is_some()})
+    }
+    fn control_call(
+        &mut self,
+        call: &readit::control::Call,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        let args = &call.arguments;
+        if call.method == "readit_state" {
+            return Ok(self.control_state(cx));
+        }
+        self.control_scope(args)?;
+        self.sync_buffers(cx);
+        let number = |key: &str, default: u64| -> Result<u64, String> {
+            match args.get(key) {
+                Some(v) => v
+                    .as_u64()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| format!("{key} must be a positive integer")),
+                None => Ok(default),
+            }
+        };
+        let path_arg = || {
+            args.get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "path is required".to_string())
+        };
+        match call.method.as_str() {
+            "readit_pin" => {
+                if self.dialog.is_some() || self.pending.is_some() {
+                    return Err("finish the editor dialog first".into());
+                }
+                let path = self.control_path(path_arg()?)?;
+                self.pin_code(path, number("line", 1)?, window, cx)?;
+                Ok(self.control_state(cx))
+            }
+            "readit_unpin" => {
+                self.pinned = None;
+                cx.notify();
+                Ok(self.control_state(cx))
+            }
+            "readit_guide_events" => {
+                self.validate_guide(cx);
+                let after = args
+                    .get("after")
+                    .and_then(|v| v.as_u64())
+                    .ok_or("after is required")?;
+                Ok(
+                    json!({"events":self.guide_events.iter().filter(|e|e["sequence"].as_u64().unwrap_or(0)>after).collect::<Vec<_>>(),
+                    "latest_sequence":self.guide_sequence,"truncated":self.guide_events.first().is_some_and(|e|after.saturating_add(1)<e["sequence"].as_u64().unwrap_or(0))}),
+                )
+            }
+            "readit_guide_load" => {
+                self.sync_buffers(cx);
+                self.validate_guide(cx);
+                if args.get("event_sequence").and_then(|v|v.as_u64())!=Some(self.guide_sequence){return Err("read guide events before loading".into());}
+                let id=args.get("id").and_then(|v|v.as_str()).filter(|s|!s.is_empty() && s.len()<=128).ok_or("id required")?.to_string();
+                let steps=self.prepare_steps(args,false)?;
+                let overview=args.get("overview").map(|v|GuideOverview::parse(v,&steps)).transpose()?;
+                self.activate_guide(steps[0].clone(),window,cx)?;
+                let show_overview=overview.is_some();
+                self.guide_tour=Some(GuideTour{id,steps,index:0,visited:0,overview,seen:BTreeSet::new()});
+                self.overview_visible=show_overview; self.overview_tab=show_overview;
+                if show_overview { self.focus.focus(window); }
+                else {let tour=self.guide_tour.as_mut().unwrap();tour.seen.insert(tour.steps[0].id.clone());}
+                Ok(self.control_state(cx))
+            }
+            "readit_guide_revise" => {
+                self.sync_buffers(cx);
+                self.validate_guide(cx);
+                if self.dialog.is_some() || self.pending.is_some(){return Err("finish the editor dialog first".into());}
+                if args.get("event_sequence").and_then(|v|v.as_u64())!=Some(self.guide_sequence){return Err("navigation changed; read state and regenerate the unread steps".into());}
+                let steps=self.prepare_steps(args,true)?;
+                let tour=self.guide_tour.as_ref().ok_or("tour ended")?;
+                if args.get("id").and_then(|v|v.as_str())!=Some(tour.id.as_str()){return Err("tour changed".into());}
+                let question=args.get("question_sequence").and_then(|v|v.as_u64()).ok_or("question_sequence required")?;
+                let answer=args.get("answer").and_then(|v|v.as_str()).filter(|s|!s.trim().is_empty() && s.chars().count()<=4000).ok_or("answer required, max 4000 characters")?.to_string();
+                let mut updated=tour.steps.clone();
+                if let Some(guide)=&self.guide{updated[tour.index]=guide.clone();}
+                let target=updated.iter().position(|g|g.pending_question==Some(question)).ok_or("question no longer pending")?;
+                if self.control_text(&updated[target].path)?!=updated[target].source{return Err("question source changed".into());}
+                let prefix=tour.visited+1;
+                if prefix+steps.len()>32{return Err("tour exceeds 32 steps".into());}
+                let mut ids=updated[..prefix].iter().map(|g|g.id.clone()).collect::<BTreeSet<_>>();
+                for step in &steps {if !ids.insert(step.id.clone()){return Err("step id duplicates retained history".into());}}
+                updated[target].answer=Some(answer);updated[target].pending_question=None;
+                updated.truncate(prefix);updated.extend(steps);
+                let overview=match args.get("overview") {
+                    Some(value)=>Some(GuideOverview::parse(value,&updated)?),
+                    None if tour.overview.is_some()=>return Err("include updated overview when revising a chaptered tour".into()),
+                    None=>None,
+                };
+                let index=tour.index;
+                if self.guide.is_some(){self.guide=Some(updated[index].clone());}
+                let tour=self.guide_tour.as_mut().unwrap();
+                tour.seen.retain(|id|updated.iter().any(|g|&g.id==id));
+                tour.steps=updated; tour.overview=overview;
+                cx.notify();
+                Ok(self.control_state(cx))
+            }
+            "readit_guide_show" => {
+                self.validate_guide(cx);
+                let sequence = args
+                    .get("event_sequence")
+                    .and_then(|v| v.as_u64())
+                    .ok_or("event_sequence is required")?;
+                if sequence != self.guide_sequence {
+                    return Err(
+                        "user responded or moved; read guide events before continuing".into(),
+                    );
+                }
+                if self.dialog.is_some() || self.pending.is_some() {
+                    return Err("finish the editor dialog first".into());
+                }
+                let guide=self.prepare_guide(args)?;
+                self.activate_guide(guide,window,cx)?;
+                self.guide_tour=None; self.overview_visible=false; self.overview_tab=false;
+                Ok(self.control_state(cx))
+            }
+            "readit_guide_answer" => {
+                self.validate_guide(cx);
+                if self.dialog.is_some() || self.pending.is_some() {
+                    return Err("finish the editor dialog first".into());
+                }
+                let guide = self.guide.as_mut().ok_or("guide ended or source changed")?;
+                let sequence = args
+                    .get("question_sequence")
+                    .and_then(|v| v.as_u64())
+                    .ok_or("question_sequence is required")?;
+                if args.get("id").and_then(|v| v.as_str()) != Some(guide.id.as_str())
+                    || guide.pending_question != Some(sequence)
+                {
+                    return Err("question is no longer pending; read guide events".into());
+                }
+                let answer = args
+                    .get("body")
+                    .and_then(|v| v.as_str())
+                    .ok_or("body is required")?;
+                if answer.trim().is_empty() || answer.chars().count() > 4000 {
+                    return Err("answer must contain 1..4000 characters".into());
+                }
+                guide.answer = Some(answer.to_string());
+                guide.pending_question = None;
+                self.guide_question
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                cx.notify();
+                Ok(self.control_state(cx))
+            }
+            "readit_guide_clear" => {
+                self.guide_response("cleared", cx);
+                Ok(self.control_state(cx))
+            }
+
+            "readit_files" => {
+                let filter = args
+                    .get("filter")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let limit = number("limit", 200)?.min(500) as usize;
+                let files = self
+                    .workspace
+                    .documents
+                    .iter()
+                    .filter(|d| {
+                        !self.external.contains(&d.path)
+                            && !self.untitled.contains(&d.path)
+                            && d.path.to_lowercase().contains(&filter)
+                    })
+                    .collect::<Vec<_>>();
+                Ok(
+                    json!({"total":files.len(),"files":files.iter().skip(offset).take(limit).map(|d|json!({"path":d.path,"dirty":d.dirty(),"language":language(&d.path)})).collect::<Vec<_>>(),"next_offset":if offset.saturating_add(limit)<files.len(){Some(offset+limit)}else{None}}),
+                )
+            }
+            "readit_read" => {
+                let path = self.control_path(path_arg()?)?;
+                let text = self.control_text(&path)?;
+                let start = number("start_line", 1)? as usize;
+                let count = number("line_count", 120)?.min(400) as usize;
+                let lines = text.split('\n').collect::<Vec<_>>();
+                if start > lines.len() {
+                    return Err("start_line is outside the file".into());
+                }
+                let end = (start - 1 + count).min(lines.len());
+                let content = lines[start - 1..end].join("\n");
+                if content.len() > 200_000 {
+                    return Err("requested lines are too large; request fewer lines".into());
+                }
+                Ok(
+                    json!({"path":self.workspace.root.join(&path),"start_line":start,"end_line":end,"total_lines":lines.len(),"text":content,"unsaved":self.workspace.index_of(&path).is_some_and(|i|self.workspace.documents[i].dirty())}),
+                )
+            }
+            "readit_search" => {
+                let query = args
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .ok_or("query must not be empty")?;
+                let limit = number("limit", 100)?.min(300) as usize;
+                let mut matches = vec![];
+                let mut more = false;
+                for doc in &self.workspace.documents {
+                    if self.external.contains(&doc.path) {
+                        continue;
+                    }
+                    for (line, text) in doc.text.lines().enumerate() {
+                        for (column, _) in text.match_indices(query) {
+                            if matches.len() == limit {
+                                more = true;
+                                break;
+                            }
+                            matches.push(json!({"path":doc.path,"line":line+1,"column":text[..column].encode_utf16().count()+1,"text":text.chars().take(500).collect::<String>()}));
+                        }
+                        if more {
+                            break;
+                        }
+                    }
+                    if more {
+                        break;
+                    }
+                }
+                Ok(json!({"matches":matches,"truncated":more,"kind":"literal text search"}))
+            }
+            "readit_open" => {
+                if self.dialog.is_some() || self.pending.is_some() {
+                    return Err("finish or dismiss the current editor dialog first".into());
+                }
+                let path = self.control_path(path_arg()?)?;
+                let text = self.control_text(&path)?;
+                let line = number("line", 1)?;
+                let column = number("column", 1)?;
+                let start = readit::control::offset_at(&text, line, column)?;
+                let end_line = number("end_line", line)?;
+                let end_column = number("end_column", column)?;
+                let end = readit::control::offset_at(&text, end_line, end_column)?;
+                if end < start {
+                    return Err("selection end must follow its start".into());
+                }
+                if self.workspace.index_of(&path).is_none() {
+                    self.workspace.documents.push(Document {
+                        path: path.clone(),
+                        text: text.clone(),
+                        disk: text.clone(),
+                        before: Some(text.clone()),
+                    });
+                    self.external.insert(path.clone());
+                }
+                self.open(&path, Some((line - 1) as usize), true, window, cx);
+                self.pending_reveal = None;
+                let editor = self.editor().ok_or("editor could not open the file")?;
+                let end_position = ls::position_at(&text, end);
+                editor.update(cx, |input, cx| {
+                    input.set_cursor_position(
+                        Position::new(end_position.line, end_position.character),
+                        window,
+                        cx,
+                    );
+                    input.select_to(start, cx);
+                    input.reveal_offset(start, cx);
+                    input.focus(window, cx);
+                });
+                let reader = cx.entity().downgrade();
+                let selected = path.clone();
+                window.on_next_frame(move |window, cx| {
+                    let _ = reader.update(cx, |this, cx| {
+                        if this.selected.as_ref() != Some(&selected) {
+                            return;
+                        }
+                        editor.update(cx, |input, cx| {
+                            if input.value().as_str() == text
+                                && input.selection_range() == (start..end)
+                            {
+                                input.set_cursor_position(
+                                    Position::new(end_position.line, end_position.character),
+                                    window,
+                                    cx,
+                                );
+                                input.select_to(start, cx);
+                                input.reveal_offset(start, cx);
+                            }
+                        });
+                    });
+                });
+                cx.notify();
+                Ok(self.control_state(cx))
+            }
+            "readit_history" => {
+                if self.dialog.is_some() || self.pending.is_some() {
+                    return Err("finish the editor dialog first".into());
+                }
+                let forward = match args.get("direction").and_then(|v| v.as_str()) {
+                    Some("back") => false,
+                    Some("forward") => true,
+                    _ => return Err("direction must be back or forward".into()),
+                };
+                self.navigate(forward, window, cx);
+                Ok(self.control_state(cx))
+            }
+            "readit_view" => {
+                if self.dialog.is_some() || self.pending.is_some() {
+                    return Err("finish the editor dialog first".into());
+                }
+                for field in ["diff", "file_tree", "wrap", "overview"] {
+                    if args.get(field).is_some_and(|v| !v.is_boolean()) {
+                        return Err(format!("{field} must be boolean"));
+                    }
+                }
+                if let Some(value)=args.get("overview").and_then(|v|v.as_bool()) {
+                    if value && self.guide_tour.as_ref().is_none_or(|t|t.overview.is_none()) {return Err("no overview loaded".into());}
+                    if value {self.show_overview(window,cx);} else {self.overview_visible=false;}
+                }
+                if let Some(value) = args.get("file_tree").and_then(|v| v.as_bool()) {
+                    self.sidebar = value;
+                }
+                if let Some(value) = args.get("wrap").and_then(|v| v.as_bool()) {
+                    if self.wrap != value {
+                        self.toggle_wrap(&ToggleWrap, window, cx);
+                    }
+                }
+                if let Some(value) = args.get("diff").and_then(|v| v.as_bool()) {
+                    if self.compare != value {
+                        self.toggle_compare(&Compare, window, cx);
+                    }
+                }
+                self.clear_pointer(cx);
+                cx.notify();
+                Ok(self.control_state(cx))
+            }
+            _ => Err("unknown editor operation".into()),
+        }
+    }
+    fn control_symbol(
+        &mut self,
+        request: readit::control::Request,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prepare = (|| -> Result<(Query, Snapshot, bool), String> {
+            self.control_scope(&request.call.arguments)?;
+            self.sync_buffers(cx);
+            if self.dialog.is_some() || self.pending.is_some() || self.nav_busy {
+                return Err("editor has an active dialog or navigation request".into());
+            }
+            let args = &request.call.arguments;
+            let query = match args.get("kind").and_then(|v| v.as_str()) {
+                Some("definition") => Query::Definition,
+                Some("references") => Query::References,
+                Some("type_definition") => Query::TypeDefinition,
+                Some("implementation") => Query::Implementation,
+                Some("symbols") => Query::Symbols,
+                Some("hover") => Query::Hover,
+                _ => return Err("invalid symbol query kind".into()),
+            };
+            let path = self.selected.as_ref().ok_or("open a file first")?;
+            if self.untitled.contains(path) {
+                return Err("save the file with an extension first".into());
+            }
+            let input = self.editor().ok_or("no active editor")?;
+            let input = input.read(cx);
+            let snapshot = Snapshot {
+                root: self.workspace.root.clone(),
+                path: self.workspace.root.join(path),
+                position: ls::position_at(&input.value(), input.cursor()),
+                documents: self
+                    .workspace
+                    .documents
+                    .iter()
+                    .filter(|d| !self.untitled.contains(&d.path))
+                    .map(|d| (self.workspace.root.join(&d.path), d.text.clone()))
+                    .collect(),
+            };
+            Ok((
+                query,
+                snapshot,
+                args.get("show").and_then(|v| v.as_bool()).unwrap_or(true),
+            ))
+        })();
+        let (query, snapshot, show) = match prepare {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = request.reply.send(Err(error));
+                return;
+            }
+        };
+        let navigation_serial = self.nav_serial;
+        let service = self.service.clone();
+        let source = snapshot.clone();
+        let cancelled = request.cancelled.clone();
+        let (sender, receiver) = futures_channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let answer = service
+                .lock()
+                .map_err(|_| "language service is unavailable".to_string())
+                .and_then(|mut s| {
+                    if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err("request cancelled".into());
+                    }
+                    s.query(query, source)
+                });
+            let _ = sender.send(answer);
+        });
+        cx.spawn_in(window,async move |this,cx| {
+            let answer=receiver.await.unwrap_or_else(|_|Err("language service closed".into()));
+            let _=this.update_in(cx,|this,_,cx| {
+                if !request.is_live() {return;}
+                this.sync_buffers(cx);
+                let result=answer.and_then(|answer| {
+                    let current_position = this.editor().map(|input| {
+                        let input = input.read(cx);
+                        ls::position_at(&input.value(), input.cursor())
+                    });
+                    if !this.snapshot_current(&snapshot)
+                        || this.selected.as_ref().map(|p|this.workspace.root.join(p)) != Some(snapshot.path.clone())
+                        || current_position != Some(snapshot.position)
+                        || this.nav_serial != navigation_serial
+                        || this.dialog.is_some() || this.pending.is_some() {
+                        return Err("editor changed during analysis; read its state again".into());
+                    }
+                    this.control_target_root=this.workspace.root.clone();this.control_targets=answer.targets.clone();
+                    let result=serde_json::json!({"server":answer.server,"targets":answer.targets.iter().map(|t|serde_json::json!({"path":t.path,"line":t.start.line+1,"column":t.start.character+1,"end_line":t.end.line+1,"end_column":t.end.character+1,"name":t.name,"preview":t.preview})).collect::<Vec<_>>(),"information":answer.information});
+                    if show {
+                        this.nav_title=query.title().into();this.nav_targets=answer.targets;
+                        this.nav_information=if answer.information.is_empty(){format!("{}件 · {}",this.nav_targets.len(),answer.server)}else{answer.information};
+                        this.nav_snapshot=Some(snapshot);this.nav_visible=true;cx.notify();
+                    }
+                    Ok(result)
+                });let _=request.reply.send(result);
+            });
+        }).detach();
+    }
+
     fn target_path(&self, target: &Target) -> String {
         target
             .path
@@ -1159,6 +2760,17 @@ impl Reader {
             })
     }
     fn analyze(&mut self, query: Query, jump: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.analyze_at(query, jump, None, window, cx);
+    }
+    fn analyze_at(
+        &mut self,
+        query: Query,
+        jump: bool,
+        at: Option<ls::Position>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_pointer(cx);
         if self.nav_busy {
             self.message = "解析中です。結果パネルの×で表示をキャンセルできます".into();
             cx.notify();
@@ -1176,7 +2788,9 @@ impl Reader {
         let Some(editor) = self.editor() else {
             return;
         };
-        let position = ls::position_at(editor.read(cx).value().as_str(), editor.read(cx).cursor());
+        let position = at.unwrap_or_else(|| {
+            ls::position_at(editor.read(cx).value().as_str(), editor.read(cx).cursor())
+        });
         let snapshot = Snapshot {
             root: self.workspace.root.clone(),
             path: self.workspace.root.join(&path),
@@ -1418,6 +3032,7 @@ impl Reader {
         self.begin(Pending::Quit, window, cx);
     }
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.overview_visible {self.overview_visible=false;self.overview_tab=false; if let Some(editor)=self.editor(){editor.update(cx,|i,cx|i.focus(window,cx));}cx.notify();return;}
         if let Some(path) = self.selected.clone() {
             self.begin(Pending::Close(path), window, cx);
         }
@@ -1434,17 +3049,12 @@ impl Reader {
         if self.tabs.is_empty() {
             return;
         }
-        let i = self
-            .selected
-            .as_ref()
-            .and_then(|p| self.tabs.iter().position(|s| s == p))
-            .unwrap_or(0);
-        let next = if forward {
-            (i + 1) % self.tabs.len()
-        } else {
-            (i + self.tabs.len() - 1) % self.tabs.len()
-        };
-        self.open(&self.tabs[next].clone(), None, true, window, cx);
+        let offset=usize::from(self.overview_tab);
+        let count=self.tabs.len()+offset;
+        let index=if self.overview_visible {0} else {self.selected.as_ref().and_then(|p|self.tabs.iter().position(|s|s==p)).unwrap_or(0)+offset};
+        let next=if forward {(index+1)%count}else{(index+count-1)%count};
+        if self.overview_tab && next==0 {self.show_overview(window,cx);}
+        else {self.open(&self.tabs[next-offset].clone(),None,true,window,cx);}
     }
     fn navigate(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.history.is_empty() {
@@ -1496,30 +3106,7 @@ impl Reader {
         }
         cx.notify();
     }
-    fn add_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(index) = self.index() else {
-            return;
-        };
-        let text = self.note.read(cx).value().to_string();
-        if text.trim().is_empty() {
-            return;
-        }
-        let line = self.position(cx).line as usize;
-        let doc = &self.workspace.documents[index];
-        self.workspace.session.notes.push(Note {
-            path: doc.path.clone(),
-            line: line + 1,
-            quote: doc.text.lines().nth(line).unwrap_or("").into(),
-            text,
-        });
-        self.message = match self.workspace.persist() {
-            Ok(()) => "コードの引用と疑問を保存しました".into(),
-            Err(e) => e,
-        };
-        self.note
-            .update(cx, |input, cx| input.set_value("", window, cx));
-        cx.notify();
-    }
+    #[cfg_attr(feature = "performance", profiling::function)]
     fn tree_entries(&self) -> Vec<readit::tree::Entry> {
         let paths = self
             .workspace
@@ -1578,12 +3165,13 @@ impl Reader {
         }
         if let Some(target) = &self.tree_target {
             if let Some(i) = self.tree_entries().iter().position(|e| &e.path == target) {
-                self.tree_scroll.scroll_to_item(i);
+                self.tree_scroll.scroll_to_item(i, ScrollStrategy::Top);
             }
         }
         cx.stop_propagation();
         cx.notify();
     }
+    #[cfg_attr(feature = "performance", profiling::function)]
     fn explorer(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let root = self
             .workspace
@@ -1598,7 +3186,8 @@ impl Reader {
             .key_context("Explorer")
             .track_focus(&self.explorer_focus)
             .on_key_down(cx.listener(Self::tree_key))
-            .w(px(245.))
+            .w(px(self.sidebar_width))
+            .relative()
             .h_full()
             .flex_shrink_0()
             .bg(rgb(PANEL))
@@ -1642,30 +3231,37 @@ impl Reader {
             .child(
                 div()
                     .id("tree-scroll")
-                    .track_scroll(&self.tree_scroll)
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .when(self.reading_path, |tree|tree.overflow_y_scroll())
                     .when(!self.reading_path, |tree| {
-                        tree.children(entries.into_iter().enumerate().map(|(i, entry)| {
+                        tree.child(uniform_list("file-tree-rows", entries.len(), cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                        range.map(|i| {
+                            let entry=entries[i].clone();
                             let path = entry.path.clone();
                             let right_path = path.clone();
-                            let menu_focus = self.explorer_focus.clone();
+                            let full_path = this
+                                .workspace
+                                .root
+                                .join(&path)
+                                .to_string_lossy()
+                                .into_owned();
+                            let menu_focus = this.explorer_focus.clone();
                             let folder = entry.file.is_none();
-                            let active = self.tree_target.as_deref() == Some(path.as_str());
-                            let badge = if self.dirty(&path) {
+                            let active = this.tree_target.as_deref() == Some(path.as_str());
+                            let badge = if this.dirty(&path) {
                                 "●"
-                            } else if self
+                            } else if this
                                 .workspace
                                 .index_of(&path)
-                                .is_some_and(|i| self.workspace.documents[i].changed())
+                                .is_some_and(|i| this.workspace.documents[i].changed())
                             {
                                 "M"
                             } else {
                                 ""
                             };
                             let icon = if folder {
-                                if self.collapsed.contains(&path) {
+                                if this.collapsed.contains(&path) {
                                     "›"
                                 } else {
                                     "⌄"
@@ -1681,7 +3277,16 @@ impl Reader {
                             };
                             div()
                                 .id(("tree-row", i))
+                                .tooltip(move |_, cx| {
+                                    cx.new(|_| {
+                                        gpui_component::tooltip::Tooltip::new(full_path.clone())
+                                    })
+                                    .into()
+                                })
                                 .h(px(29.))
+                                .flex_shrink_0()
+                                .min_w_0()
+                                .overflow_hidden()
                                 .pl(px(14. + entry.depth as f32 * 14.))
                                 .pr_3()
                                 .flex()
@@ -1723,13 +3328,21 @@ impl Reader {
                                 )
                                 .child(
                                     div()
-                                        .flex_1()
+                                        .w(px((this.sidebar_width
+                                            - 72.
+                                            - entry.depth as f32 * 14.)
+                                            .max(0.)))
+                                        .flex_shrink_0()
                                         .overflow_hidden()
+                                        .line_clamp(1)
+                                        .text_ellipsis()
                                         .text_size(px(12.))
                                         .child(entry.name),
                                 )
                                 .child(
                                     div()
+                                        .flex_shrink_0()
+                                        .whitespace_nowrap()
                                         .text_color(rgb(ACCENT))
                                         .text_size(px(11.))
                                         .child(badge),
@@ -1742,7 +3355,8 @@ impl Reader {
                                         .menu("名前を変更…", Box::new(RenameFile))
                                         .menu("削除…", Box::new(DeleteFile))
                                 })
-                        }))
+                        }).collect::<Vec<_>>()
+                        })).track_scroll(self.tree_scroll.clone()).h_full())
                     })
                     .when(self.reading_path, |tree| {
                         tree.children(
@@ -1805,6 +3419,24 @@ impl Reader {
                         })),
                     ),
             )
+            .child(
+                div()
+                    .id("explorer-resize")
+                    .absolute()
+                    .right(px(0.))
+                    .top(px(0.))
+                    .bottom(px(0.))
+                    .w(px(5.))
+                    .cursor_col_resize()
+                    .hover(|style| style.bg(rgb(ACCENT)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.sidebar_drag = Some((event.position.x, this.sidebar_width));
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
     }
     fn tab_strip(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
@@ -1817,12 +3449,16 @@ impl Reader {
             .bg(rgb(PANEL))
             .border_b_1()
             .border_color(rgb(BORDER))
+            .when(self.overview_tab, |strip|strip.child(div().id("overview-tab").h_full().px_3().flex().gap_3().items_center().bg(rgb(if self.overview_visible {BG}else{PANEL})).cursor_pointer()
+                .on_click(cx.listener(|this,_,w,cx|this.show_overview(w,cx)))
+                .child("概観")
+                .child(button("overview-close","×").on_click(cx.listener(|this,_,w,cx|{cx.stop_propagation();this.overview_tab=false;this.overview_visible=false;if let Some(e)=this.editor(){e.update(cx,|i,cx|i.focus(w,cx));}cx.notify();})))))
             .children(self.tabs.iter().enumerate().map(|(i, path)| {
                 let name = path.rsplit('/').next().unwrap_or(path).to_string();
                 let open_path = path.clone();
                 let close_path = path.clone();
                 let middle_path = path.clone();
-                let selected = self.selected.as_ref() == Some(path);
+                let selected = !self.overview_visible && self.selected.as_ref() == Some(path);
                 div()
                     .id(("tab", i))
                     .h_full()
@@ -1873,108 +3509,6 @@ impl Reader {
                             })),
                     )
             }))
-    }
-    fn inspector(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let index = self.index();
-        let line = self.position(cx).line as usize;
-        let reviewed = index.is_some_and(|i| self.workspace.reviewed(i));
-        div()
-            .id("inspector")
-            .w(px(295.))
-            .h_full()
-            .flex_shrink_0()
-            .p_4()
-            .bg(rgb(PANEL))
-            .border_l_1()
-            .border_color(rgb(BORDER))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(caption("UNDERSTANDING · ⌥⌘B"))
-            .child(div().flex_shrink_0().text_lg().child("何がわかった？"))
-            .child(caption("コードを読み、根拠と疑問を記録する。"))
-            .child(
-                button(
-                    "reviewed",
-                    if reviewed {
-                        "✓ 理解済み · 取り消す"
-                    } else {
-                        "このファイルを理解済みにする"
-                    },
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(i) = this.index() {
-                        let doc = &this.workspace.documents[i];
-                        if this.workspace.reviewed(i) {
-                            this.workspace.session.reviewed.remove(&doc.path);
-                        } else {
-                            this.workspace
-                                .session
-                                .reviewed
-                                .insert(doc.path.clone(), doc.text.clone());
-                        }
-                        this.message = match this.workspace.persist() {
-                            Ok(()) => "理解の記録を保存しました".into(),
-                            Err(e) => e,
-                        };
-                        cx.notify();
-                    }
-                })),
-            )
-            .child(caption(format!("疑問を残す · L{}", line + 1)))
-            .child(div().flex_shrink_0().child(Input::new(&self.note)))
-            .child(
-                button("note", "＋ コードと一緒に記録")
-                    .on_click(cx.listener(|this, _, w, cx| this.add_note(w, cx))),
-            )
-            .children(
-                self.workspace
-                    .session
-                    .notes
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, n)| self.selected.as_ref() == Some(&n.path))
-                    .map(|(i, note)| {
-                        let path = note.path.clone();
-                        let line = note.line.saturating_sub(1);
-                        let stale = index.is_none_or(|i| {
-                            self.workspace.documents[i].text.lines().nth(line)
-                                != Some(note.quote.as_str())
-                        });
-                        div()
-                            .id(("note-card", i))
-                            .flex_shrink_0()
-                            .p_3()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open(&path, Some(line), true, window, cx)
-                            }))
-                            .child(caption(format!(
-                                "L{}{}",
-                                note.line,
-                                if stale {
-                                    " · 引用が変化しています"
-                                } else {
-                                    ""
-                                }
-                            )))
-                            .child(div().my_2().text_size(px(12.)).child(note.text.clone()))
-                            .child(caption(note.quote.clone()))
-                    }),
-            )
-            .child(
-                div()
-                    .mt_4()
-                    .flex_shrink_0()
-                    .border_t_1()
-                    .border_color(rgb(BORDER))
-                    .pt_4()
-                    .child(caption("AI説明生成は未接続です。")),
-            )
     }
     fn overlay(&self, cx: &mut Context<Self>) -> AnyElement {
         let panel = div()
@@ -2079,7 +3613,16 @@ impl Reader {
 }
 
 impl Render for Reader {
+    #[cfg_attr(feature = "performance", profiling::function)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.validate_guide(cx);
+        if self
+            .pinned
+            .as_ref()
+            .is_some_and(|p| p.root != self.workspace.root)
+        {
+            self.pinned = None;
+        }
         // A newly opened editor needs one layout before it can reveal a distant line.
         if let Some((path, position)) = self.pending_reveal.take() {
             let reader = cx.entity().downgrade();
@@ -2100,6 +3643,41 @@ impl Render for Reader {
         let position = self.position(cx);
         let overlay = self.dialog.is_some() || self.pending.is_some();
         div().size_full().relative().key_context("Readit").track_focus(&self.focus).flex().flex_col().bg(rgb(BG)).text_color(rgb(TEXT)).font_family(".SystemUIFont").text_size(px(13.))
+            .on_mouse_move(cx.listener(|this,event: &MouseMoveEvent,w,cx| {
+                if let Some(guide)=this.guide.as_mut() {
+                    if let Some((start,origin))=guide.drag {
+                        if event.pressed_button==Some(MouseButton::Left) {
+                            guide.position=Some(origin+event.position-start);
+                            this.clear_pointer(cx);cx.notify();return;
+                        }
+                        guide.drag=None;
+                    }
+                }
+                if let Some((start,width))=this.sidebar_drag {
+                    if event.pressed_button==Some(MouseButton::Left) {
+                        this.sidebar_width=(width+f32::from(event.position.x-start)).clamp(180.,(f32::from(w.viewport_size().width)-320.).clamp(180.,700.));
+                        this.clear_pointer(cx);cx.notify();return;
+                    }
+                    this.sidebar_drag=None;
+                }
+                if event.pressed_button.is_some() { this.clear_pointer(cx); }
+                else if !this.overview_visible { this.update_pointer(event.position,event.modifiers.secondary(),w,cx); }
+            }))
+            .on_mouse_up(MouseButton::Left,cx.listener(|this,_,_,_| { this.sidebar_drag=None; if let Some(guide)=this.guide.as_mut() {guide.drag=None;} }))
+            .on_modifiers_changed(cx.listener(|this,event: &ModifiersChangedEvent,w,cx| {
+                if event.modifiers.secondary() { this.update_pointer(w.mouse_position(),true,w,cx); }
+                else { this.clear_pointer(cx); }
+            }))
+            .on_scroll_wheel(cx.listener(|this,_,w,cx| { if !this.pointer_popup_bounds.is_some_and(|b| b.contains(&w.mouse_position())) { this.clear_pointer(cx); } }))
+            .capture_action(cx.listener(|this,_: &gpui_component::input::Escape,w,cx| {
+                this.guide_response("end",cx);
+                if this.pointer_preview.is_some() {
+                    this.clear_pointer(cx);
+                    if let Some(editor) = this.editor() { editor.update(cx,|input,cx|input.focus(w,cx)); }
+                }
+            }))
+            .capture_key_down(cx.listener(|this,event: &KeyDownEvent,_,cx| { if event.keystroke.key == "escape" { this.guide_response("end",cx); } if matches!(event.keystroke.key.as_str(), "escape" | "up" | "down" | "left" | "right" | "pageup" | "pagedown" | "home" | "end") { this.clear_pointer(cx); } }))
+            .on_action(cx.listener(|this, _: &PinCode,w,cx|this.pin_current(w,cx)))
             .on_action(cx.listener(|this, _: &Definition, w, cx| this.analyze(Query::Definition,true,w,cx)))
             .on_action(cx.listener(|this, _: &PeekDefinition, w, cx| this.analyze(Query::Definition,false,w,cx)))
             .on_action(cx.listener(|this, _: &TypeDefinition, w, cx| this.analyze(Query::TypeDefinition,true,w,cx)))
@@ -2126,7 +3704,6 @@ impl Render for Reader {
             .on_action(cx.listener(|this, _: &Help, w, cx| this.show(Dialog::Help, "", w, cx)))
             .on_action(cx.listener(|this, _: &Escape, w, cx| this.dismiss(w, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| { this.sidebar = !this.sidebar; cx.notify(); }))
-            .on_action(cx.listener(|this, _: &ToggleInspector, _, cx| { this.inspector = !this.inspector; cx.notify(); }))
             .on_action(cx.listener(|this, _: &FocusExplorer, w, cx| { this.sidebar = true; this.explorer_focus.focus(w); cx.notify(); }))
             .on_action(cx.listener(|this, _: &NextTab, w, cx| this.cycle(true, w, cx)))
             .on_action(cx.listener(|this, _: &PreviousTab, w, cx| this.cycle(false, w, cx)))
@@ -2138,6 +3715,7 @@ impl Render for Reader {
             .child(div().h(px(48.)).flex_shrink_0().px_4().flex().gap_4().items_center().justify_between().border_b_1().border_color(rgb(BORDER))
                 .child(div().flex().gap_3().items_center().child(div().text_lg().font_weight(FontWeight::BOLD).text_color(rgb(ACCENT)).child("readit"))
                     .child(caption(self.workspace.root.file_name().unwrap_or_default().to_string_lossy().into_owned())))
+                .when(self.guide_tour.as_ref().is_some_and(|t|t.overview.is_some()), |bar|bar.child(button("show-overview","概観に戻る").on_click(cx.listener(|this,_,w,cx|this.show_overview(w,cx)))))
                 .child(button("quick-open", "ファイルを開く…  ⌘P").on_click(cx.listener(|this, _, w, cx| this.show(Dialog::Quick, "", w, cx))))
                 .child(div().flex().gap_2()
                     .child(button("open-folder", "フォルダを開く").on_click(cx.listener(|this, _, w, cx| this.pick_path(true, w, cx))))
@@ -2146,8 +3724,11 @@ impl Render for Reader {
                 .when(self.sidebar, |row| row.child(self.explorer(cx)))
                 .child(div().flex_1().min_w_0().h_full().flex().flex_col()
                     .child(self.tab_strip(cx))
-                    .child(div().h(px(38.)).px_4().flex_shrink_0().flex().items_center().justify_between().border_b_1().border_color(rgb(BORDER))
-                        .child(caption(if path.is_empty() { "ファイルを選択してください".into() } else if self.external.contains(&path) { format!("外部定義 › {}",std::path::Path::new(&path).file_name().unwrap_or_default().to_string_lossy()) } else { path.clone() }))
+                    .when(self.overview_visible, |column|column.child(self.overview_panel(cx)))
+                    .when(!self.overview_visible, |column|column
+                    .child(div().min_h(px(38.)).py_2().px_4().gap_3().flex_shrink_0().flex().items_center().justify_between().border_b_1().border_color(rgb(BORDER))
+                        .child(div().id("file-full-path").flex_1().min_w_0().overflow_x_scroll()
+                            .child(caption(if path.is_empty() { "ファイルを選択してください".into() } else { path.clone() }).whitespace_nowrap()))
                         .child(div().flex().gap_2().when(!path.is_empty(), |bar| bar
                             .child(button("save", "保存  ⌘S").on_click(cx.listener(|this, _, w, cx| this.save(&Save, w, cx))))
                             .child(button("compare", if self.compare { "編集に戻る" } else { "差分" }).on_click(cx.listener(|this, _, w, cx| this.toggle_compare(&Compare, w, cx)))))))
@@ -2157,10 +3738,11 @@ impl Render for Reader {
                         .child(button("nav-definition", "定義 F12").on_click(cx.listener(|this,_,w,cx| this.analyze(Query::Definition,true,w,cx))))
                         .child(button("nav-references", "使用箇所 ⇧F12").on_click(cx.listener(|this,_,w,cx| this.analyze(Query::References,false,w,cx))))
                         .child(button("nav-symbols", "シンボル ⇧⌘O").on_click(cx.listener(|this,_,w,cx| this.analyze(Query::Symbols,false,w,cx))))
+                        .child(button("pin-code", "横に固定").on_click(cx.listener(|this,_,w,cx|this.pin_current(w,cx))))
                         .child(button("nav-hover", "型・説明").on_click(cx.listener(|this,_,w,cx| this.analyze(Query::Hover,false,w,cx))))
                         .when(self.external.contains(&path), |bar|bar.child(caption("外部定義 · 閲覧専用"))))
                     .child(div().flex_1().min_h_0().min_w_0().overflow_hidden()
-                        .on_mouse_up(MouseButton::Left,cx.listener(|this,event: &MouseUpEvent,w,cx| { if event.modifiers.secondary() && !this.compare { this.analyze(Query::Definition,true,w,cx); } }))
+                        .on_mouse_up(MouseButton::Left,cx.listener(|this,event: &MouseUpEvent,w,cx| { if event.modifiers.secondary() && !this.compare { if let Some((_,_,position)) = this.pointer_symbol(event.position,cx) { this.analyze_at(Query::Definition,true,Some(position),w,cx); } } }))
                         .when(!self.compare, |area| {
                             if let Some(editor) = &editor { area.child(Input::new(editor).disabled(self.external.contains(&path)).h_full().appearance(false).bordered(false).focus_bordered(false).font_family("Menlo").text_size(px(self.font_size))) }
                             else { area.child(div().size_full().flex().flex_col().gap_4().items_center().justify_center().child(div().text_2xl().child("Readit"))
@@ -2175,15 +3757,536 @@ impl Render for Reader {
                                     .child(div().w(px(100.)).flex_shrink_0().text_size(px(11.)).text_color(rgb(MUTED)).child(format!("{:>4} {:>4} {}", row.old.map(|i| (i+1).to_string()).unwrap_or_default(), row.new.map(|i| (i+1).to_string()).unwrap_or_default(), match row.kind { Kind::Added => "+", Kind::Removed => "−", _ => " " })))
                                     .child(div().font_family("Menlo").whitespace_nowrap().text_size(px(this.font_size)).text_color(rgb(color)).child(row.text))
                             }).collect::<Vec<_>>()
-                        })).track_scroll(self.diff_scroll.clone()).h_full())))
+                        })).track_scroll(self.diff_scroll.clone()).h_full()))))
                 )
-                .when(self.inspector, |row| row.child(self.inspector(cx))))
+                .when(self.pinned.is_some() && !self.overview_visible,|row|row.child(self.pinned_panel(cx))))
             .when(self.nav_visible, |root| root.child(self.navigation_panel(cx)))
             .child(div().h(px(29.)).flex_shrink_0().px_3().flex().items_center().justify_between().bg(rgb(PANEL)).border_t_1().border_color(rgb(BORDER))
                 .child(caption(self.message.clone()))
                 .child(caption(format!("Ln {}, Col {}  ·  {}  ·  UTF-8  ·  {}", position.line + 1, position.character + 1, language(&path), if self.wrap { "Wrap" } else { "No wrap" }))))
+            .when(!overlay && !self.overview_visible && self.guide.is_none(), |root| root.child(self.pointer_overlay(window,cx)))
+            .when(!overlay && !self.overview_visible && !self.compare, |root| root.child(self.guide_overlay(window,cx)))
             .when(overlay, |root| root.child(div().absolute().inset_0().bg(rgba(0x00000070)).flex().items_start().justify_center()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(self.overlay(cx))))
     }
 }
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::guide_placement;
+    use gpui::Bounds;
+    use super::{Position, Reader, Target, Workspace, ls};
+    use gpui::{AppContext, Modifiers, TestAppContext, point, px, size};
+
+    #[test]
+    fn guide_avoids_multiline_annotation_and_clamps_drag_position() {
+        let viewport=size(px(1000.),px(800.));
+        for (top,bottom) in [(200.,400.),(550.,740.),(20.,650.)] {
+            let anchor=Bounds::from_corners(point(px(260.),px(top)),point(px(780.),px(bottom)));
+            let (origin,extent)=guide_placement(anchor,viewport,px(250.),None);
+            assert!(origin.y+extent.height <= anchor.top() || origin.y >= anchor.bottom());
+            assert!(origin.y >= px(0.) && origin.y+extent.height <= viewport.height);
+            let (moved,extent)=guide_placement(anchor,viewport,px(250.),Some(point(px(-90.),px(900.))));
+            assert!(moved.x >= px(0.) && moved.y+extent.height <= viewport.height);
+        }
+    }
+
+    #[test]
+    fn manually_placed_guide_uses_actual_height_and_ignores_scrolling_anchor() {
+        let viewport = size(px(1400.), px(1200.));
+        let requested = point(px(320.), px(850.));
+        for top in [-600., 20., 900.] {
+            let anchor = Bounds::new(point(px(300.), px(top)), size(px(600.), px(100.)));
+            let (origin, _) = guide_placement(anchor, viewport, px(240.), Some(requested));
+            assert_eq!(origin, requested);
+            let (bottom, extent) = guide_placement(anchor, viewport, px(240.), Some(point(px(320.), px(2000.))));
+            assert_eq!(bottom.y + extent.height, viewport.height - px(12.));
+        }
+    }
+
+    #[gpui::test]
+    fn overview_preserves_tour_across_detours_and_validates_chapters(cx: &mut TestAppContext) {
+        let directory=tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("sample.py"),"one = 1\ntwo = 2\n").unwrap();
+        std::fs::write(directory.path().join("other.py"),"other = 3\n").unwrap();
+        let workspace=Workspace::load(directory.path()).unwrap();
+        let root=workspace.root.clone();
+        cx.update(|cx|{gpui_component::init(cx);crate::commands::init(cx);});
+        let mut reader=None;
+        let (_,cx)=cx.add_window_view(|w,cx|{
+            let view=cx.new(|cx|Reader::new(workspace,false,w,cx));reader=Some(view.clone());
+            gpui_component::Root::new(view,w,cx)
+        });
+        let reader=reader.unwrap();
+        cx.simulate_resize(size(px(1120.),px(700.)));
+        cx.update(|w,cx|reader.update(cx,|this,cx|{
+            let steps=serde_json::json!([
+                {"id":"one","title":"代入","body":"最初の値", "path":"sample.py","line":1,"column":1,"expected_text":"one = 1"},
+                {"id":"two","title":"次の値","body":"次の代入", "path":"sample.py","line":2,"column":1,"expected_text":"two = 2"}]);
+            let overview=serde_json::json!({"title":"値の定義","summary":"二つの値を読む","relationships":"sample.py → 値の定義", "chapters":[
+                {"title":"最初","summary":"最初の代入を確認","start_step":"one"},
+                {"title":"次","summary":"次の代入を確認","start_step":"two"}]});
+            let load=|overview|readit::control::Call{method:"readit_guide_load".into(),arguments:serde_json::json!({"workspace":root,"id":"overview-tour","event_sequence":0,"steps":steps,"overview":overview})};
+            let mut bad=overview.clone();bad["chapters"][1]["start_step"]="missing".into();
+            assert!(this.control_call(&load(bad),w,cx).is_err());
+            assert!(this.guide_tour.is_none());
+            let mut bad=overview.clone();bad["chapters"][0]["start_step"]="two".into();
+            assert!(this.control_call(&load(bad),w,cx).is_err());
+            this.control_call(&load(overview),w,cx).unwrap();
+            assert!(this.overview_visible);
+            this.guide_step(1,w,cx); // Jump directly into the second chapter.
+            assert!(!this.overview_visible);
+            assert_eq!(this.guide.as_ref().unwrap().id,"two");
+            assert_eq!(this.guide_tour.as_ref().unwrap().seen.len(),1);
+            this.open("other.py",None,true,w,cx);
+            this.validate_guide(cx);
+            assert!(this.guide.is_none());
+            assert!(this.guide_tour.is_some());
+            this.show_overview(w,cx);
+            assert!(this.overview_visible);
+            this.guide_step(0,w,cx); // Resume a paused chapter.
+            assert_eq!(this.guide.as_ref().unwrap().id,"two");
+            this.guide_step(1,w,cx); // Completing the tour keeps its overview.
+            assert!(this.guide.is_none());
+            assert!(this.guide_tour.is_some());
+            this.show_overview(w,cx);
+            this.guide_step(-1,w,cx);
+            this.open_guide_question(w,cx);
+            this.guide_question.update(cx,|i,cx|i.set_value("この値は？",w,cx));
+            this.submit_guide_question(cx);
+            let seq=this.guide_sequence;
+            let mut revise=readit::control::Call{method:"readit_guide_revise".into(),arguments:serde_json::json!({"workspace":root,"id":"overview-tour","event_sequence":seq,"question_sequence":seq,"answer":"最初の値です","steps":[]})};
+            assert!(this.control_call(&revise,w,cx).is_err());
+            revise.arguments["overview"]=serde_json::to_value(this.guide_tour.as_ref().unwrap().overview.as_ref().unwrap()).unwrap();
+            this.control_call(&revise,w,cx).unwrap();
+            assert!(this.guide.as_ref().unwrap().answer.is_some());
+            this.editor().unwrap().update(cx,|i,cx|i.set_value("changed",w,cx));
+            this.show_overview(w,cx);
+            this.guide_step(1,w,cx);
+            assert!(this.overview_visible); // Stale target cannot replace the visible overview.
+            assert!(this.guide.is_none());
+            this.guide_response("cleared",cx);
+            assert!(this.guide_tour.is_none());
+            assert!(!this.overview_visible);
+        }));
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn prepared_tour_navigates_offline_and_revises_unread_steps_atomically(cx: &mut TestAppContext) {
+        let directory=tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("sample.py"),"one = 1\ntwo = 2\nthree = 3\n").unwrap();
+        let workspace=Workspace::load(directory.path()).unwrap();
+        let root=workspace.root.clone();
+        cx.update(|cx|{gpui_component::init(cx);crate::commands::init(cx);});
+        let mut reader=None;
+        let (_,cx)=cx.add_window_view(|w,cx|{
+            let view=cx.new(|cx|Reader::new(workspace,false,w,cx));reader=Some(view.clone());
+            gpui_component::Root::new(view,w,cx)
+        });
+        let reader=reader.unwrap();
+        cx.simulate_resize(size(px(1420.),px(900.)));
+        cx.update(|w,cx|reader.update(cx,|this,cx|{
+            let step=|id:&str,line:u64,text:&str|serde_json::json!({"id":id,"title":id,"body":"解説", "path":"sample.py","line":line,"column":1,"expected_text":text});
+            let steps=serde_json::json!([step("one",1,"one = 1"),step("two",2,"two = 2"),step("three",3,"three = 3")]);
+            let load=|steps|readit::control::Call{method:"readit_guide_load".into(),arguments:serde_json::json!({"workspace":root,"id":"tour","event_sequence":0,"steps":steps})};
+            let mut invalid=steps.clone();invalid[2]["expected_text"]="stale".into();
+            assert!(this.control_call(&load(invalid),w,cx).is_err());
+            assert!(this.guide_tour.is_none());
+            this.control_call(&load(steps),w,cx).unwrap();
+            this.guide_step(1,w,cx);
+            assert_eq!(this.guide.as_ref().unwrap().id,"two");
+            assert!(this.guide.as_ref().unwrap().pending_next.is_none());
+            this.open_guide_question(w,cx);
+            this.guide_question.update(cx,|input,cx|input.set_value("なぜ2なの？",w,cx));
+            this.submit_guide_question(cx);
+            let question=this.guide_sequence;
+            this.guide_step(-1,w,cx); // Pending generation does not prevent reading history.
+            assert_eq!(this.guide.as_ref().unwrap().id,"one");
+            let revise=|sequence,steps|readit::control::Call{method:"readit_guide_revise".into(),arguments:serde_json::json!({"workspace":root,"id":"tour","event_sequence":sequence,"question_sequence":question,"answer":"2はこの例で代入した値です。","steps":steps})};
+            let replacement=serde_json::json!([step("revised",3,"three = 3")]);
+            assert!(this.control_call(&revise(question,replacement.clone()),w,cx).is_err());
+            let mut invalid=replacement.clone();invalid[0]["expected_text"]="stale".into();
+            assert!(this.control_call(&revise(this.guide_sequence,invalid),w,cx).is_err());
+            assert_eq!(this.guide_tour.as_ref().unwrap().steps[2].id,"three");
+            this.control_call(&revise(this.guide_sequence,replacement.clone()),w,cx).unwrap();
+            assert_eq!(this.guide_tour.as_ref().unwrap().index,0);
+            this.guide_step(1,w,cx);
+            assert!(this.guide.as_ref().unwrap().answer.is_some());
+            this.guide_step(1,w,cx);
+            assert_eq!(this.guide.as_ref().unwrap().id,"revised");
+            this.guide_step(1,w,cx);
+            assert!(this.guide.is_none() && this.guide_tour.is_none());
+            assert!(this.control_call(&revise(this.guide_sequence,replacement),w,cx).is_err());
+        }));
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn control_reveals_ranges_reads_unsaved_buffers_and_respects_user_context(
+        cx: &mut TestAppContext,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("sample.py"),
+            "first = 1\nsecond = first + 1\n",
+        )
+        .unwrap();
+        let workspace = Workspace::load(directory.path()).unwrap();
+        let root = workspace.root.to_string_lossy().into_owned();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::commands::init(cx);
+        });
+        let mut reader = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| Reader::new(workspace, false, window, cx));
+            reader = Some(view.clone());
+            gpui_component::Root::new(view, window, cx)
+        });
+        let reader = reader.unwrap();
+        cx.simulate_resize(size(px(1420.), px(900.)));
+        let call = |method: &str, arguments: serde_json::Value| readit::control::Call {
+            method: method.into(),
+            arguments,
+        };
+        cx.update(|window,cx|reader.update(cx,|this,cx| {
+            let result=this.control_call(&call("readit_open",serde_json::json!({"workspace":root,"path":"sample.py","line":2,"column":10,"end_line":2,"end_column":15})),window,cx).unwrap();
+            assert_eq!(result["selection"]["text"],"first");
+            assert_eq!(result["cursor"]["line"],2);
+            assert!(this.control_call(&call("readit_open",serde_json::json!({"workspace":"/wrong-project","path":"sample.py"})),window,cx).is_err());
+            assert!(this.control_call(&call("readit_read",serde_json::json!({"workspace":root,"path":"/etc/passwd"})),window,cx).is_err());
+        }));
+        cx.run_until_parked();
+        cx.update(|window,cx|reader.update(cx,|this,cx| {
+            assert_eq!(this.control_state(cx)["selection"]["text"],"first");
+            let editor=this.editor().unwrap();
+            editor.update(cx,|input,cx|input.set_value("first = 1\nsecond = first + 2\n",window,cx));
+            let result=this.control_call(&call("readit_read",serde_json::json!({"workspace":root,"path":"sample.py","start_line":2,"line_count":1})),window,cx).unwrap();
+            assert_eq!(result["text"],"second = first + 2");
+            assert_eq!(result["unsaved"],true);
+            this.dialog=Some(super::Dialog::Quick);
+            assert!(this.control_call(&call("readit_open",serde_json::json!({"workspace":root,"path":"sample.py"})),window,cx).is_err());
+            assert!(this.dialog.is_some());
+        }));
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("sample.py")).unwrap(),
+            "first = 1\nsecond = first + 1\n"
+        );
+    }
+
+    #[gpui::test]
+    fn pin_preserves_navigation_and_tracks_unsaved_changes(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("main.py"), "value = 1\n").unwrap();
+        std::fs::write(
+            directory.path().join("related.py"),
+            "def related():\n    return 2\n",
+        )
+        .unwrap();
+        let workspace = Workspace::load(directory.path()).unwrap();
+        let root = workspace.root.clone();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::commands::init(cx);
+        });
+        let mut reader = None;
+        let (_, cx) = cx.add_window_view(|w, cx| {
+            let view = cx.new(|cx| Reader::new(workspace, false, w, cx));
+            reader = Some(view.clone());
+            gpui_component::Root::new(view, w, cx)
+        });
+        let reader = reader.unwrap();
+        cx.simulate_resize(size(px(1420.), px(900.)));
+        cx.update(|w, cx| {
+            reader.update(cx, |this, cx| {
+                this.open("main.py", None, true, w, cx);
+                let selected = this.selected.clone();
+                let cursor = this.position(cx);
+                let call = |method: &str, path: &str| readit::control::Call {
+                    method: method.into(),
+                    arguments: serde_json::json!({"workspace":root,"path":path,"line":1}),
+                };
+                this.control_call(&call("readit_pin", "related.py"), w, cx)
+                    .unwrap();
+                assert_eq!(this.selected, selected);
+                assert_eq!(this.position(cx), cursor);
+                assert!(
+                    this.control_call(&call("readit_pin", "/etc/passwd"), w, cx)
+                        .is_err()
+                );
+                this.editor()
+                    .unwrap()
+                    .update(cx, |input, cx| input.set_value("value = 3\n", w, cx));
+                this.control_call(&call("readit_pin", "main.py"), w, cx)
+                    .unwrap();
+                assert_eq!(this.pinned.as_ref().unwrap().source, "value = 3\n");
+                this.editor()
+                    .unwrap()
+                    .update(cx, |input, cx| input.set_value("value = 4\n", w, cx));
+                assert!(this.pinned_changed(cx));
+                assert_eq!(
+                    this.pinned
+                        .as_ref()
+                        .unwrap()
+                        .input
+                        .read(cx)
+                        .value()
+                        .as_str(),
+                    "value = 3\n"
+                );
+                this.control_call(&call("readit_pin", "main.py"), w, cx)
+                    .unwrap();
+                assert!(!this.pinned_changed(cx));
+                this.control_call(&call("readit_unpin", ""), w, cx).unwrap();
+                assert!(this.pinned.is_none());
+                assert_eq!(
+                    this.editor().unwrap().read(cx).value().as_str(),
+                    "value = 4\n"
+                );
+            })
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("main.py")).unwrap(),
+            "value = 1\n"
+        );
+    }
+
+    #[gpui::test]
+    fn control_reveals_distant_lines_after_initial_layout(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let text = (0..400)
+            .map(|i| format!("value_{i} = {i}\n"))
+            .collect::<String>();
+        std::fs::write(directory.path().join("long.py"), text).unwrap();
+        let workspace = Workspace::load(directory.path()).unwrap();
+        let root = workspace.root.clone();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::commands::init(cx);
+        });
+        let mut reader = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| Reader::new(workspace, false, window, cx));
+            reader = Some(view.clone());
+            gpui_component::Root::new(view, window, cx)
+        });
+        let reader = reader.unwrap();
+        cx.simulate_resize(size(px(1420.), px(900.)));
+        cx.update(|window,cx|reader.update(cx,|this,cx|{
+            this.control_call(&readit::control::Call{method:"readit_open".into(),arguments:serde_json::json!({"workspace":root,"path":"long.py","line":300,"column":1,"end_line":300,"end_column":10})},window,cx).unwrap();
+            this.pin_code("long.py".into(), 200, window, cx).unwrap();
+        }));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            reader.update(cx, |this, cx| {
+                let state = this.control_state(cx);
+                let viewport = &state["selection"]["viewport"];
+                assert!(viewport["start_line"].as_u64().unwrap() <= 300, "{state}");
+                assert!(viewport["end_line"].as_u64().unwrap() >= 300, "{state}");
+                assert_eq!(state["selection"]["text"], "value_299");
+                let pinned = this.pinned.as_ref().unwrap();
+                let visible = pinned.input.read(cx).visible_range().unwrap();
+                let offset = readit::control::offset_at(&pinned.source, 200, 1).unwrap();
+                assert!(visible.contains(&offset), "pinned viewport: {visible:?}, target: {offset}");
+            })
+        });
+    }
+
+    #[gpui::test]
+    fn guide_checks_source_and_tracks_user_responses(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("sample.py"), "value = 42\n").unwrap();
+        let workspace = Workspace::load(directory.path()).unwrap();
+        let root = workspace.root.clone();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::commands::init(cx);
+        });
+        let mut reader = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| Reader::new(workspace, false, window, cx));
+            reader = Some(view.clone());
+            gpui_component::Root::new(view, window, cx)
+        });
+        let reader = reader.unwrap();
+        cx.simulate_resize(size(px(1420.), px(900.)));
+        cx.update(|window,cx| reader.update(cx,|this,cx| {
+            let mut args=serde_json::json!({"workspace":root,"id":"step-1","title":"値の代入","body":"valueに42を代入します。","path":"sample.py","line":1,"column":1,"expected_text":"value = 42","event_sequence":0});
+            let show=|arguments|readit::control::Call{method:"readit_guide_show".into(),arguments};
+            this.control_call(&show(args.clone()),window,cx).unwrap();
+            assert_eq!(this.control_state(cx)["selection"]["text"],"value = 42");
+            this.open_guide_question(window,cx);
+            this.submit_guide_question(cx);
+            assert_eq!(this.guide_sequence,0); // Blank questions stay in the form.
+            this.guide_question.update(cx,|input,cx|input.set_value("なぜ42なのですか？",window,cx));
+            this.submit_guide_question(cx);
+            this.submit_guide_question(cx); // A repeated click cannot submit twice.
+            assert_eq!(this.guide_sequence,1);
+            assert!(this.guide.is_some());
+            assert!(this.control_call(&show(args.clone()),window,cx).is_err());
+            let events=this.control_call(&readit::control::Call{method:"readit_guide_events".into(),arguments:serde_json::json!({"workspace":root,"after":0})},window,cx).unwrap();
+            assert_eq!(events["events"][0]["action"],"question");
+            assert_eq!(events["events"][0]["question"],"なぜ42なのですか？");
+            assert_eq!(events["events"][0]["expected_text"],"value = 42");
+            let answer=|sequence|readit::control::Call{method:"readit_guide_answer".into(),arguments:serde_json::json!({"workspace":root,"id":"step-1","question_sequence":sequence,"body":"このテストの例として置いた値です。"})};
+            assert!(this.control_call(&answer(9),window,cx).is_err());
+            this.control_call(&answer(1),window,cx).unwrap();
+            assert_eq!(this.guide.as_ref().unwrap().question.as_deref(),Some("なぜ42なのですか？"));
+            this.open_guide_question(window,cx);
+            this.guide_question.update(cx,|input,cx|input.set_value("43にしても動きますか？",window,cx));
+            this.submit_guide_question(cx);
+            assert!(this.control_call(&answer(1),window,cx).is_err());
+            assert_eq!(this.guide_events.last().unwrap()["previous_question"],"なぜ42なのですか？");
+            this.control_call(&answer(2),window,cx).unwrap();
+            this.guide_response("next",cx);
+            assert!(this.guide.as_ref().unwrap().pending_next.is_some());
+            let next_sequence=this.guide_sequence;
+            this.guide_response("next",cx);
+            assert_eq!(this.guide_sequence,next_sequence);
+            this.open_guide_question(window,cx);
+            assert!(!this.guide.as_ref().unwrap().question_open);
+            assert!(this.control_call(&answer(2),window,cx).is_err());
+            args["event_sequence"]=3.into();args["expected_text"]="wrong".into();
+            assert!(this.control_call(&show(args.clone()),window,cx).is_err());
+            args["expected_text"]="value = 42".into();
+            this.control_call(&show(args),window,cx).unwrap();
+            this.editor().unwrap().update(cx,|input,cx|input.set_value("value = 43\n",window,cx));
+            this.validate_guide(cx);
+            assert!(this.guide.is_none());
+            assert_eq!(this.guide_events.last().unwrap()["action"],"interrupted");
+            this.control_call(&show(serde_json::json!({"workspace":root,"id":"escape","title":"終了テスト","body":"Escで終了","path":"sample.py","line":1,"column":1,"expected_text":"value = 43","event_sequence":this.guide_sequence})),window,cx).unwrap();
+        }));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        cx.update(|_, cx| {
+            let this = reader.read(cx);
+            assert!(this.guide.is_none());
+            assert_eq!(this.guide_events.last().unwrap()["action"], "end");
+        });
+
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("sample.py")).unwrap(),
+            "value = 42\n"
+        );
+    }
+
+    #[gpui::test]
+    fn pointer_navigation_preserves_cursor_and_cancels_stale_previews(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("source.py"),
+            "def total(value):\n    return value\n\nresult = total(5)\n",
+        )
+        .unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let external_path = external.path().join("builtins.pyi");
+        std::fs::write(&external_path, "# fixture\nclass int:\n    pass\n").unwrap();
+        let workspace = Workspace::load(directory.path()).unwrap();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::commands::init(cx);
+        });
+        let mut reader = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| Reader::new(workspace, false, window, cx));
+            reader = Some(view.clone());
+            gpui_component::Root::new(view, window, cx)
+        });
+        let reader = reader.unwrap();
+        cx.simulate_resize(size(px(1420.), px(900.)));
+        cx.run_until_parked();
+        let (position, original) = cx.update(|_, cx| {
+            let this = reader.read(cx);
+            let input = this.editor().unwrap();
+            let input = input.read(cx);
+            let text = input.value();
+            let offset = text.rfind("total").unwrap();
+            let bounds = input.range_to_bounds(&(offset..offset + 1)).unwrap();
+            (
+                point(bounds.left() + px(2.), bounds.top() + px(2.)),
+                input.cursor(),
+            )
+        });
+        cx.simulate_mouse_move(position, None, Modifiers::none());
+        cx.update(|_, cx| {
+            let this = reader.read(cx);
+            assert!(!this.pointer_preview.as_ref().unwrap().definition);
+            assert_eq!(this.editor().unwrap().read(cx).cursor(), original);
+        });
+        let command = Modifiers {
+            platform: true,
+            ..Modifiers::none()
+        };
+        cx.simulate_modifiers_change(command);
+        let old_serial = cx.update(|_, cx| {
+            let this = reader.read(cx);
+            assert!(this.pointer_preview.as_ref().unwrap().definition);
+            assert_eq!(this.editor().unwrap().read(cx).cursor(), original);
+            this.pointer_serial
+                .load(std::sync::atomic::Ordering::Relaxed)
+        });
+        cx.simulate_modifiers_change(Modifiers::none());
+        cx.update(|_, cx| {
+            let this = reader.read(cx);
+            assert!(this.pointer_preview.is_none());
+            assert!(
+                this.pointer_serial
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    > old_serial
+            );
+        });
+        cx.simulate_mouse_move(point(px(20.), position.y), None, command);
+        cx.update(|_, cx| assert!(reader.read(cx).pointer_preview.is_none()));
+        cx.simulate_mouse_move(position, None, command);
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-10.))),
+            ..Default::default()
+        });
+        cx.update(|_, cx| assert!(reader.read(cx).pointer_preview.is_none()));
+        cx.simulate_mouse_move(position, None, command);
+        cx.simulate_keystrokes("escape");
+        cx.update(|_, cx| assert!(reader.read(cx).pointer_preview.is_none()));
+        cx.simulate_mouse_move(position, None, command);
+        cx.update(|_, cx| {
+            reader.update(cx, |this, cx| {
+                let preview = this.pointer_preview.as_mut().unwrap();
+                preview.targets = vec![Target {
+                    path: external_path.canonicalize().unwrap(),
+                    start: ls::Position {
+                        line: 1,
+                        character: 6,
+                    },
+                    end: ls::Position {
+                        line: 1,
+                        character: 9,
+                    },
+                    name: "int".into(),
+                    detail: String::new(),
+                    preview: String::new(),
+                }];
+                preview.information = "class int".into();
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.simulate_click(position, command);
+        cx.update(|_, cx| {
+            let this = reader.read(cx);
+            let path = this.selected.as_ref().unwrap();
+            assert_eq!(
+                path,
+                &external_path.canonicalize().unwrap().to_string_lossy()
+            );
+            assert!(this.external.contains(path));
+            assert_eq!(this.position(cx), Position::new(1, 6));
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "ui_e2e_tests.rs"]
+mod ui_e2e_tests;

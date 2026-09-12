@@ -1,10 +1,15 @@
 [package]
 name = "readit"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 publish = false
 
+[features]
+performance = ["dep:profiling", "profiling/profile-with-tracing", "dep:tracing"]
+
 [dependencies]
+profiling = { version = "=1.0.18", optional = true }
+tracing = { version = "=0.1.44", optional = true }
 gpui = { version = "=0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
 gpui-component = { version = "=0.5.1", features = ["tree-sitter-languages"] }
 gpui-component-assets = "=0.5.1"
@@ -15,3 +20,13 @@ futures-channel = "0.3"
 
 [profile.dev]
 debug = 0
+
+[profile.release]
+debug = 1
+
+[patch.crates-io]
+gpui-component = { path = "vendor/gpui-component" }
+
+[dev-dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["test-support"] }
+tempfile = "3"

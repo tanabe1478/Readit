@@ -28,19 +28,24 @@ pub fn entries_with_directories(
         }
         nodes.insert(path.clone(), Some(index));
     }
+    // Build parent -> direct children once. Recursively rescanning all nodes costs
+    // O(directory_count * node_count) on every editor redraw.
+    let mut by_parent = BTreeMap::<&str, Vec<(&String, &Option<usize>)>>::new();
+    for (path, file) in &nodes {
+        by_parent.entry(path.rsplit_once('/').map_or("", |(p, _)|p)).or_default().push((path,file));
+    }
+    for children in by_parent.values_mut() {
+        children.sort_by_key(|(path,file)|(file.is_some(),path.to_lowercase()));
+    }
     fn visit(
         parent: &str,
         depth: usize,
-        nodes: &BTreeMap<String, Option<usize>>,
+        by_parent: &BTreeMap<&str, Vec<(&String, &Option<usize>)>>,
         collapsed: &BTreeSet<String>,
         out: &mut Vec<Entry>,
     ) {
-        let mut children: Vec<_> = nodes
-            .iter()
-            .filter(|(path, _)| path.rsplit_once('/').map_or("", |(p, _)| p) == parent)
-            .collect();
-        children.sort_by_key(|(path, file)| (file.is_some(), path.to_lowercase()));
-        for (path, file) in children {
+        let Some(children)=by_parent.get(parent) else {return;};
+        for &(path, file) in children {
             out.push(Entry {
                 path: path.clone(),
                 name: path.rsplit('/').next().unwrap().into(),
@@ -48,12 +53,12 @@ pub fn entries_with_directories(
                 file: *file,
             });
             if file.is_none() && !collapsed.contains(path) {
-                visit(path, depth + 1, nodes, collapsed, out);
+                visit(path, depth + 1, by_parent, collapsed, out);
             }
         }
     }
     let mut out = Vec::new();
-    visit("", 0, &nodes, collapsed, &mut out);
+    visit("", 0, &by_parent, collapsed, &mut out);
     out
 }
 
