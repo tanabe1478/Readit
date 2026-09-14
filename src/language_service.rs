@@ -86,6 +86,7 @@ pub fn language_id(path: &Path) -> Option<&'static str> {
     match path.extension()?.to_str()? {
         "py" | "pyi" => Some("python"),
         "rs" => Some("rust"),
+        "java" => Some("java"),
         "ts" | "mts" | "cts" => Some("typescript"),
         "tsx" => Some("typescriptreact"),
         "js" | "mjs" | "cjs" => Some("javascript"),
@@ -94,7 +95,7 @@ pub fn language_id(path: &Path) -> Option<&'static str> {
     }
 }
 fn family(language: &str) -> &str {
-    if matches!(language, "python" | "rust") {
+    if matches!(language, "python" | "rust" | "java") {
         language
     } else {
         "typescript"
@@ -294,7 +295,11 @@ fn read_message(reader: &mut impl BufRead) -> Result<Value> {
 }
 fn settings() -> Value {
     json!({"python":{"analysis":{"autoSearchPaths":true,"useLibraryCodeForTypes":true,"diagnosticMode":"openFilesOnly","typeCheckingMode":"basic"}},
-        "rust-analyzer":{"checkOnSave":false,"check":{"enable":false},"cargo":{"buildScripts":{"enable":false}},"procMacro":{"enable":false}}})
+        "rust-analyzer":{"checkOnSave":false,"check":{"enable":false},"cargo":{"buildScripts":{"enable":false}},"procMacro":{"enable":false}},
+        // Reading only: no build on save, no formatter, no code generation.
+        "java":{"autobuild":{"enabled":false},"maven":{"downloadSources":true},"import":{"gradle":{"enabled":true},"maven":{"enabled":true}},
+            "references":{"includeDecompiledSources":true},"signatureHelp":{"enabled":false},"implementationsCodeLens":{"enabled":false},
+            "errors":{"incompleteClasspath":{"severity":"ignore"}}}})
 }
 fn configuration(section: &str) -> Value {
     let mut result = settings();
@@ -312,8 +317,52 @@ fn runtime() -> Value {
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(Value::Null)
 }
-fn server_command(language: &str) -> Result<(Command, String)> {
+/// Where Eclipse JDT keeps its own project model; the opened repository is never written to.
+fn java_data_dir(root: &Path) -> PathBuf {
+    let mut name = String::new();
+    for part in root.to_string_lossy().chars() {
+        name.push(if part.is_alphanumeric() { part } else { '-' });
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home).join(".readit/jdtls").join(name)
+}
+fn java_command(config: &Value, root: &Path) -> Result<(Command, String)> {
+    let java = std::env::var("READIT_JAVA")
+        .ok()
+        .or_else(|| config["java"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| "java".into());
+    let launcher = config["javaLauncher"]
+        .as_str()
+        .ok_or("Java言語サーバー未導入です。Readitで python3 scripts/setup_lsp.py を実行してください")?;
+    let configuration = config["javaConfiguration"]
+        .as_str()
+        .ok_or("Java言語サーバーの設定が見つかりません。scripts/setup_lsp.pyを再実行してください")?;
+    let data = java_data_dir(root);
+    std::fs::create_dir_all(&data).map_err(|e| e.to_string())?;
+    let mut command = Command::new(java);
+    command.args([
+        "-Declipse.application=org.eclipse.jdt.ls.core.id1",
+        "-Dosgi.bundles.defaultStartLevel=4",
+        "-Declipse.product=org.eclipse.jdt.ls.core.product",
+        "-Dlog.level=ERROR",
+        "-Xmx2G",
+        "--add-modules=ALL-SYSTEM",
+        "--add-opens",
+        "java.base/java.util=ALL-UNNAMED",
+        "--add-opens",
+        "java.base/java.lang=ALL-UNNAMED",
+        "-jar",
+    ]);
+    command.arg(launcher);
+    command.arg("-configuration").arg(configuration);
+    command.arg("-data").arg(data);
+    Ok((command, "Eclipse JDT Language Server".into()))
+}
+fn server_command(language: &str, root: &Path) -> Result<(Command, String)> {
     let config = runtime();
+    if language == "java" {
+        return java_command(&config, root);
+    }
     if language == "rust" {
         let path = std::env::var("READIT_RUST_ANALYZER")
             .ok()
@@ -363,7 +412,7 @@ impl Drop for Client {
 }
 impl Client {
     fn start(language: &str, root: &Path) -> Result<Self> {
-        let (mut command, name) = server_command(language)?;
+        let (mut command, name) = server_command(language, root)?;
         let mut child = command
             .current_dir(root)
             .stdin(Stdio::piped())
@@ -440,6 +489,11 @@ impl Client {
         };
         let options = if language == "rust" {
             configuration("rust-analyzer")
+        } else if language == "java" {
+            // Eclipse JDT takes its settings at initialize; class file contents stay off
+            // because this editor opens plain files only.
+            json!({"workspaceFolders":[root_uri],"settings":settings(),
+                "extendedClientCapabilities":{"classFileContentsSupport":false,"progressReportProvider":false,"advancedExtractRefactoringSupport":false,"resolveAdditionalTextEditsSupport":false}})
         } else if language == "typescript" {
             json!({"hostInfo":"readit","tsserver":{"path":tools_dir().join("node_modules/typescript/lib/tsserver.js")},"preferences":{"includePackageJsonAutoImports":"off"}})
         } else {
@@ -543,7 +597,7 @@ impl Service {
     pub fn query(&mut self, query: Query, snapshot: Snapshot) -> Result<Answer> {
         let language = family(
             language_id(&snapshot.path)
-                .ok_or("この言語の解析は未対応です（Python・JS/TS・Rustに対応）")?,
+                .ok_or("この言語の解析は未対応です（Python・JS/TS・Rust・Javaに対応）")?,
         )
         .to_string();
         if self.root != snapshot.root {
@@ -580,8 +634,13 @@ impl Service {
             params["context"] = json!({"includeDeclaration":true});
         }
         let mut result = client.request(query.method(), params.clone(), Duration::from_secs(20))?;
-        if language == "rust" && client.warming_up {
-            let deadline = Instant::now() + Duration::from_secs(5);
+        if matches!(language.as_str(), "rust" | "java") && client.warming_up {
+            let deadline = Instant::now()
+                + if language == "java" {
+                    Duration::from_secs(180)
+                } else {
+                    Duration::from_secs(5)
+                };
             while (result.is_null() || result.as_array().is_some_and(|v| v.is_empty()))
                 && Instant::now() < deadline
             {

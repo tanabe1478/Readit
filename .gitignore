@@ -5,3 +5,4 @@
 __pycache__/
 node_modules/
 tools/lsp/runtime.json
+tools/lsp/jdtls/

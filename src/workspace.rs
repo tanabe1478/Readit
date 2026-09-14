@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Component, Path, PathBuf},
     process::Command,
@@ -8,7 +8,7 @@ use std::{
 
 pub type Result<T> = std::result::Result<T, String>;
 const MAX_BYTES: u64 = 256 * 1024;
-const MAX_FILES: usize = 400;
+const MAX_FILES: usize = 5000;
 
 #[derive(Clone, Debug)]
 pub struct Document {
@@ -97,6 +97,10 @@ pub struct Session {
 
 pub struct Workspace {
     pub root: PathBuf,
+    /// Every readable path in the project. Content is read only when a file is actually opened.
+    pub files: Vec<String>,
+    /// Paths Git reports as changed, so the tree can mark a file that was never opened.
+    pub changed: BTreeSet<String>,
     pub documents: Vec<Document>,
     pub session: Session,
     pub warnings: Vec<String>,
@@ -116,6 +120,30 @@ fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
+}
+
+/// Paths Git already considers changed, read once so the tree needs no file content.
+fn changed_paths(root: &Path) -> BTreeSet<String> {
+    let Ok(bytes) = git_output(root, &["status", "--porcelain", "-z", "--untracked-files=all"])
+    else {
+        return BTreeSet::new();
+    };
+    let mut records = bytes.split(|b| *b == 0);
+    let mut changed = BTreeSet::new();
+    while let Some(record) = records.next() {
+        if record.len() < 4 {
+            continue;
+        }
+        let status = &record[..2];
+        // A rename or copy is followed by its source path in a separate record.
+        if status.starts_with(b"R") || status.starts_with(b"C") {
+            records.next();
+        }
+        if let Ok(path) = String::from_utf8(record[3..].to_vec()) {
+            changed.insert(path);
+        }
+    }
+    changed
 }
 
 fn safe_path(root: &Path, relative: &str) -> Result<PathBuf> {
@@ -198,7 +226,7 @@ fn walk(
             paths.push(rel.to_string_lossy().into_owned());
         }
         if paths.len() >= MAX_FILES {
-            warnings.push("最大400ファイルまで読み込みました".into());
+            warnings.push(format!("最大{MAX_FILES}ファイルまで読み込みました"));
             break;
         }
     }
@@ -245,6 +273,7 @@ impl Workspace {
             .open(path)
             .map_err(|e| e.to_string())?;
         file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+        self.track(relative);
         self.documents.push(Document {
             path: relative.into(),
             disk: text.into(),
@@ -289,6 +318,14 @@ impl Workspace {
         for doc in &mut self.documents {
             doc.path = remap(&doc.path);
         }
+        for path in &mut self.files {
+            *path = remap(path);
+        }
+        self.files.sort_by_key(|p| (order(p), p.clone()));
+        self.changed = std::mem::take(&mut self.changed)
+            .into_iter()
+            .map(|p| remap(&p))
+            .collect();
         for note in &mut self.session.notes {
             note.path = remap(&note.path);
         }
@@ -339,8 +376,11 @@ impl Workspace {
         fs::write(dir.join("path.json"), serde_json::to_vec(relative).unwrap())
             .map_err(|e| e.to_string())?;
         fs::rename(src, dir.join("content")).map_err(|e| e.to_string())?;
+        let prefix = format!("{relative}/");
         self.documents
-            .retain(|d| d.path != relative && !d.path.starts_with(&format!("{relative}/")));
+            .retain(|d| d.path != relative && !d.path.starts_with(&prefix));
+        self.files
+            .retain(|p| p != relative && !p.starts_with(&prefix));
         Ok(())
     }
 
@@ -387,32 +427,95 @@ impl Workspace {
         Err("復元できるファイルがありません".into())
     }
 
-    pub fn add_existing(&mut self, relative: &str) -> Result<()> {
-        if self.index_of(relative).is_some() {
-            return Ok(());
+    /// True when the path belongs to this project, whether or not it has been read yet.
+    pub fn lists(&self, path: &str) -> bool {
+        self.files.iter().any(|p| p == path)
+    }
+
+    /// True when the path can be opened from the project listing or is already loaded.
+    pub fn known(&self, path: &str) -> bool {
+        self.index_of(path).is_some() || self.lists(path)
+    }
+
+    /// Walk the project text without loading it. Unsaved buffers win; the rest is read on the fly.
+    /// `visit` returns false to stop early, so a capped search never reads the whole project.
+    pub fn scan(&self, mut visit: impl FnMut(&str, &str) -> bool) {
+        for path in &self.files {
+            let loaded = self.index_of(path).map(|i| &self.documents[i].text);
+            let read;
+            let text = match loaded {
+                Some(text) => text.as_str(),
+                None => {
+                    let full = match safe_path(&self.root, path) {
+                        Ok(full) => full,
+                        Err(_) => continue,
+                    };
+                    if fs::metadata(&full).is_ok_and(|m| m.len() > MAX_BYTES) {
+                        continue;
+                    }
+                    read = match fs::read(full) {
+                        Ok(bytes) => match String::from_utf8(bytes) {
+                            Ok(text) => text,
+                            Err(_) => continue,
+                        },
+                        Err(_) => continue,
+                    };
+                    read.as_str()
+                }
+            };
+            if !visit(path, text) {
+                return;
+            }
+        }
+    }
+
+    /// Read one file on first use. Opening a project lists paths only, so this is where content arrives.
+    pub fn ensure(&mut self, relative: &str) -> Result<usize> {
+        if let Some(index) = self.index_of(relative) {
+            return Ok(index);
         }
         let path = safe_path(&self.root, relative)?;
-        if fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_BYTES {
+        let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+        if !metadata.is_file() {
+            return Err("ファイルではありません".into());
+        }
+        if metadata.len() > MAX_BYTES {
             return Err("ファイルが大きすぎます（上限256KiB）".into());
         }
-        let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        if text.contains('\0') {
+        let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+        if bytes.contains(&0) {
             return Err("バイナリファイルは編集できません".into());
         }
+        let text = String::from_utf8(bytes).map_err(|_| "UTF-8以外のファイルです".to_string())?;
         let before = if self.git {
             git_output(&self.root, &["show", &format!("HEAD:{relative}")])
                 .ok()
+                .filter(|b| b.len() <= MAX_BYTES as usize && !b.contains(&0))
                 .and_then(|b| String::from_utf8(b).ok())
         } else {
             Some(text.clone())
         };
+        self.track(relative);
         self.documents.push(Document {
             path: relative.into(),
             disk: text.clone(),
             text,
             before,
         });
-        Ok(())
+        Ok(self.documents.len() - 1)
+    }
+
+    pub fn add_existing(&mut self, relative: &str) -> Result<()> {
+        self.ensure(relative).map(|_| ())
+    }
+
+    /// Keep a new path in the listing, in the same reading order the project was opened with.
+    fn track(&mut self, relative: &str) {
+        if self.files.iter().any(|f| f == relative) {
+            return;
+        }
+        self.files.push(relative.into());
+        self.files.sort_by_key(|p| (order(p), p.clone()));
     }
 
     pub fn directories(&self) -> Vec<String> {
@@ -486,62 +589,25 @@ impl Workspace {
         paths.dedup();
         paths.sort_by_key(|p| (order(p), p.clone()));
         if paths.len() > MAX_FILES {
-            warnings.push(format!("{}ファイル中、先頭400件を表示", paths.len()));
+            warnings.push(format!(
+                "{}ファイル中、先頭{MAX_FILES}件を表示",
+                paths.len()
+            ));
             paths.truncate(MAX_FILES);
         }
-        let has_head = git && git_output(&root, &["rev-parse", "--verify", "HEAD"]).is_ok();
-        let mut documents = Vec::new();
-        for relative in paths {
-            // HEAD is the baseline; deleted paths are reported but not edited by this prototype.
-            let before = if has_head {
-                git_output(&root, &["show", &format!("HEAD:{relative}")])
-                    .ok()
-                    .filter(|b| b.len() <= MAX_BYTES as usize && !b.contains(&0))
-                    .and_then(|b| String::from_utf8(b).ok())
-            } else {
-                None
-            };
-            if !root.join(&relative).exists() {
-                if before.is_some() {
-                    warnings.push(format!("削除済み（この試作では閲覧対象外）: {relative}"));
-                }
-                continue;
+        // Listing is all the project costs at startup; each file is read when it is opened.
+        paths.retain(|relative| {
+            match fs::symlink_metadata(root.join(relative)) {
+                Ok(metadata) => metadata.is_file(),
+                // Git lists paths that were deleted in the working tree; this prototype cannot edit them.
+                Err(_) => false,
             }
-            let path = match safe_path(&root, &relative) {
-                Ok(p) => p,
-                Err(e) => {
-                    warnings.push(e);
-                    continue;
-                }
-            };
-            let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
-            if !metadata.is_file() {
-                continue;
-            }
-            if metadata.len() > MAX_BYTES {
-                warnings.push(format!("256KiB超を除外: {relative}"));
-                continue;
-            }
-            let bytes = fs::read(path).map_err(|e| e.to_string())?;
-            if bytes.contains(&0) {
-                warnings.push(format!("バイナリを除外: {relative}"));
-                continue;
-            }
-            let text = match String::from_utf8(bytes) {
-                Ok(s) => s,
-                Err(_) => {
-                    warnings.push(format!("UTF-8以外を除外: {relative}"));
-                    continue;
-                }
-            };
-            let before = if git { before } else { Some(text.clone()) };
-            documents.push(Document {
-                path: relative,
-                disk: text.clone(),
-                text,
-                before,
-            });
-        }
+        });
+        let changed = if git {
+            changed_paths(&root)
+        } else {
+            BTreeSet::new()
+        };
         let session_path = root.join(".readit/session.json");
         let session = if session_path.exists() {
             match safe_path(&root, ".readit/session.json").and_then(|p| {
@@ -559,7 +625,9 @@ impl Workspace {
         };
         Ok(Self {
             root,
-            documents,
+            files: paths,
+            changed,
+            documents: Vec::new(),
             session,
             warnings,
             git,
@@ -754,6 +822,8 @@ mod tests {
         let root = temp();
         fs::write(root.join("a.rs"), "original\n").unwrap();
         let mut ws = Workspace::load(&root).unwrap();
+        assert!(ws.documents.is_empty(), "opening a project reads no file");
+        assert_eq!(ws.ensure("a.rs").unwrap(), 0);
         ws.session
             .reviewed
             .insert("a.rs".into(), "original\n".into());
@@ -770,6 +840,7 @@ mod tests {
         let root = temp();
         fs::write(root.join("a.rs"), "fn read() {}\nfn reader() {}\n").unwrap();
         let mut ws = Workspace::load(&root).unwrap();
+        ws.ensure("a.rs").unwrap();
         assert_eq!(ws.references("read").len(), 1);
         ws.session.notes.push(Note {
             path: "a.rs".into(),
@@ -780,7 +851,8 @@ mod tests {
         ws.persist().unwrap();
         let loaded = Workspace::load(&root).unwrap();
         assert_eq!(loaded.session.notes[0].text, "なぜ？");
-        assert_eq!(loaded.documents.len(), 1);
+        assert_eq!(loaded.files, vec!["a.rs".to_string()]);
+        assert!(loaded.documents.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
     #[cfg(unix)]
@@ -822,20 +894,13 @@ mod tests {
         fs::write(root.join("new.rs"), "new\n").unwrap();
         let mut ws = Workspace::load(&root).unwrap();
         assert!(ws.git);
-        assert!(!ws.documents.iter().any(|d| d.path == "ignored.rs"));
-        assert!(
-            ws.documents
-                .iter()
-                .find(|d| d.path == "new.rs")
-                .unwrap()
-                .before
-                .is_none()
-        );
-        let i = ws
-            .documents
-            .iter()
-            .position(|d| d.path == "日本語 file.rs")
-            .unwrap();
+        assert!(!ws.files.iter().any(|p| p == "ignored.rs"));
+        // Git reports both files as changed before either one is read.
+        assert!(ws.changed.contains("new.rs"));
+        assert!(ws.changed.contains("日本語 file.rs"));
+        let new = ws.ensure("new.rs").unwrap();
+        assert!(ws.documents[new].before.is_none());
+        let i = ws.ensure("日本語 file.rs").unwrap();
         assert_eq!(ws.documents[i].before.as_deref(), Some("before\n"));
         assert_eq!(ws.documents[i].text, "working\n");
         ws.documents[i].replace_line(0, "experiment").unwrap();
@@ -859,7 +924,7 @@ mod tests {
         fs::write(outside.join("secret"), "secret").unwrap();
         std::os::unix::fs::symlink(outside.join("secret"), root.join("link")).unwrap();
         assert!(safe_path(&root, "../secret").is_err());
-        assert!(Workspace::load(&root).unwrap().documents.is_empty());
+        assert!(Workspace::load(&root).unwrap().files.is_empty());
         std::os::unix::fs::symlink(&outside, root.join(".readit")).unwrap();
         assert!(Workspace::load(&root).unwrap().persist().is_err());
         fs::remove_dir_all(root).unwrap();

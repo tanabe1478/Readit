@@ -10,6 +10,7 @@ use readit::{
 use std::{
     cell::RefCell,
     collections::{BTreeSet, HashMap},
+    hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -221,6 +222,7 @@ pub struct Reader {
     tab_scroll: ScrollHandle,
     collapsed: BTreeSet<String>,
     directories: Vec<String>,
+    tree_cache: RefCell<Option<(u64, Rc<Vec<readit::tree::Entry>>)>>,
     tree_target: Option<String>,
     reading_path: bool,
     sidebar: bool,
@@ -330,7 +332,7 @@ impl Reader {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let initial = workspace.documents.first().map(|d| d.path.clone());
+        let initial = workspace.files.first().cloned();
         let directories = workspace.directories();
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("入力…"));
         let guide_question =
@@ -391,6 +393,7 @@ impl Reader {
             tree_scroll: UniformListScrollHandle::new(),
             tab_scroll: ScrollHandle::new(),
             collapsed: BTreeSet::new(),
+            tree_cache: RefCell::new(None),
             tree_target: None,
             reading_path: false,
             sidebar: true,
@@ -462,9 +465,12 @@ impl Reader {
     ) {
         self.overview_visible = false;
         self.clear_pointer(cx);
-        let Some(index) = self.workspace.index_of(path) else {
-            self.message = "ファイルが見つかりません".into();
-            return;
+        let index = match self.workspace.ensure(path) {
+            Ok(index) => index,
+            Err(error) => {
+                self.message = format!("開けません: {error}");
+                return;
+            }
         };
         if record && let Some(current) = self.selected.clone() {
             let pos = self.position(cx);
@@ -795,7 +801,7 @@ impl Reader {
                 }
                 self.closed.clear();
                 for path in tabs {
-                    if self.workspace.index_of(&path).is_some() {
+                    if self.workspace.known(&path) {
                         self.open(&path, None, false, window, cx);
                         if let Some(pos) = positions.get(&path) {
                             if let Some(editor) = self.editor() {
@@ -815,7 +821,7 @@ impl Reader {
                     }
                 }
                 if let Some(path) = selected {
-                    if self.workspace.index_of(&path).is_some() {
+                    if self.workspace.known(&path) {
                         self.open(&path, None, true, window, cx);
                     }
                 }
@@ -838,7 +844,7 @@ impl Reader {
                         return;
                     }
                 }
-                let first = file.or_else(|| workspace.documents.first().map(|d| d.path.clone()));
+                let first = file.or_else(|| workspace.files.first().cloned());
                 self.nav_serial += 1;
                 self.nav_busy = false;
                 self.nav_visible = false;
@@ -864,7 +870,7 @@ impl Reader {
                 self.message = format!(
                     "{} · {}件のファイル",
                     self.workspace.root.display(),
-                    self.workspace.documents.len()
+                    self.workspace.files.len()
                 );
             }
             Err(e) => self.message = e,
@@ -960,19 +966,19 @@ impl Reader {
             Some(Dialog::Quick) => {
                 let mut picks = self
                     .workspace
-                    .documents
+                    .files
                     .iter()
-                    .filter_map(|d| {
-                        let path = d.path.to_lowercase();
+                    .filter_map(|file| {
+                        let path = file.to_lowercase();
                         let mut rest = path.as_str();
                         for c in q.chars() {
                             let at = rest.find(c)?;
                             rest = &rest[at + c.len_utf8()..];
                         }
                         Some(Pick {
-                            label: d.path.clone(),
-                            detail: if self.dirty(&d.path) { "未保存" } else { "" }.into(),
-                            path: Some(d.path.clone()),
+                            label: file.clone(),
+                            detail: if self.dirty(file) { "未保存" } else { "" }.into(),
+                            path: Some(file.clone()),
                             line: None,
                             command: None,
                             target: None,
@@ -995,27 +1001,29 @@ impl Reader {
                     target: None,
                 })
                 .collect(),
-            Some(Dialog::WorkspaceSearch) if !q.is_empty() => self
-                .workspace
-                .documents
-                .iter()
-                .flat_map(|doc| {
-                    let q = q.clone();
-                    doc.text
-                        .lines()
-                        .enumerate()
-                        .filter(move |(_, line)| line.to_lowercase().contains(&q))
-                        .map(move |(line, text)| Pick {
-                            label: format!("{}:{}", doc.path, line + 1),
-                            detail: text.trim().to_string(),
-                            path: Some(doc.path.clone()),
+            Some(Dialog::WorkspaceSearch) if !q.is_empty() => {
+                let mut picks: Vec<Pick> = Vec::new();
+                self.workspace.scan(|path, text| {
+                    for (line, content) in text.lines().enumerate() {
+                        if !content.to_lowercase().contains(&q) {
+                            continue;
+                        }
+                        picks.push(Pick {
+                            label: format!("{}:{}", path, line + 1),
+                            detail: content.trim().to_string(),
+                            path: Some(path.to_string()),
                             line: Some(line),
                             command: None,
                             target: None,
-                        })
-                })
-                .take(200)
-                .collect(),
+                        });
+                        if picks.len() == 200 {
+                            return false;
+                        }
+                    }
+                    true
+                });
+                picks
+            }
             _ => vec![],
         }
     }
@@ -1261,7 +1269,7 @@ impl Reader {
             "restore" => match self.workspace.restore_last_deleted() {
                 Ok(path) => {
                     self.directories = self.workspace.directories();
-                    if self.workspace.index_of(&path).is_some() {
+                    if self.workspace.known(&path) {
                         self.open(&path, None, true, window, cx);
                     }
                     self.tree_target = Some(path);
@@ -1706,9 +1714,7 @@ impl Reader {
             if let Some(buffer) = self.buffers.get(&p.path) {
                 buffer.input.read(cx).value().as_str() != p.source
             } else {
-                self.workspace
-                    .index_of(&p.path)
-                    .is_some_and(|i| self.workspace.documents[i].text != p.source)
+                self.control_text(&p.path).map_or(true, |text| text != p.source)
             }
         })
     }
@@ -1805,14 +1811,20 @@ impl Reader {
         }
     }
 
+    /// A step is stale when its file no longer holds the text the guide was built from.
+    /// A file the project has not read yet is not stale; it is simply unopened.
+    fn guide_steps_stale(&self, tour: &GuideTour, cx: &App) -> bool {
+        tour.steps.iter().any(|g| match self.buffers.get(&g.path) {
+            Some(buffer) => buffer.input.read(cx).value().as_str() != g.source,
+            None => self.control_text(&g.path).map_or(true, |text| text != g.source),
+        })
+    }
+
     #[cfg_attr(feature = "performance", profiling::function)]
     fn overview_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(tour)=&self.guide_tour else {return div().into_any_element();};
         let Some(overview)=&tour.overview else {return div().into_any_element();};
-        let stale=tour.steps.iter().any(|g| {
-            if let Some(buffer)=self.buffers.get(&g.path) {buffer.input.read(cx).value().as_str()!=g.source}
-            else {self.workspace.index_of(&g.path).is_none_or(|i|self.workspace.documents[i].text!=g.source)}
-        });
+        let stale=self.guide_steps_stale(tour, cx);
         div().id("reading-overview").flex_1().min_h_0().overflow_y_scroll().p_5()
             .child(div().max_w(px(900.)).flex().flex_col().gap_4()
                 .child(caption("全体像 → 章の概要 → 実際のコード"))
@@ -1833,7 +1845,18 @@ impl Reader {
                             .child(div().font_weight(FontWeight::BOLD).child(format!("{:02}  {}",i+1,chapter.title)))
                             .child(caption(format!("{} / {} 箇所を表示済み{}",seen,end-start,if current {" · 現在の章"}else{""}))))
                         .child(chapter.summary.clone())
-                        .child(caption(tour.steps[start..end].iter().map(|g|self.workspace.root.join(&g.path).to_string_lossy().into_owned()).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>().join("\n")))
+                        // A full path has no break opportunity and would run past the card,
+                        // so each file shows as its folder and name only.
+                        .children(tour.steps[start..end].iter().map(|g|{
+                            let mut parts=g.path.rsplit('/');
+                            let name=parts.next().unwrap_or(&g.path);
+                            match parts.next() {
+                                Some(folder)=>format!("{folder}/{name}"),
+                                None=>name.to_owned(),
+                            }
+                        }).collect::<BTreeSet<_>>().into_iter().map(|label|{
+                            div().text_size(px(11.)).text_color(rgb(MUTED)).child(label)
+                        }))
                         .when(!stale,|card|card.child(button(("chapter-open",i),"コードを読む →").on_click(cx.listener(move |this,_,w,cx| {
                             if let Some(t)=&this.guide_tour {let delta=start as i32-t.index as i32;this.guide_step(delta,w,cx);}
                         }))))
@@ -2265,7 +2288,7 @@ impl Reader {
             .unwrap_or(&absolute)
             .to_string_lossy()
             .into_owned();
-        if self.workspace.index_of(&key).is_some() {
+        if self.workspace.known(&key) {
             return Ok(key);
         }
         if self.control_target_root == self.workspace.root
@@ -2472,16 +2495,16 @@ impl Reader {
                 let limit = number("limit", 200)?.min(500) as usize;
                 let files = self
                     .workspace
-                    .documents
+                    .files
                     .iter()
-                    .filter(|d| {
-                        !self.external.contains(&d.path)
-                            && !self.untitled.contains(&d.path)
-                            && d.path.to_lowercase().contains(&filter)
+                    .filter(|path| {
+                        !self.external.contains(*path)
+                            && !self.untitled.contains(*path)
+                            && path.to_lowercase().contains(&filter)
                     })
                     .collect::<Vec<_>>();
                 Ok(
-                    json!({"total":files.len(),"files":files.iter().skip(offset).take(limit).map(|d|json!({"path":d.path,"dirty":d.dirty(),"language":language(&d.path)})).collect::<Vec<_>>(),"next_offset":if offset.saturating_add(limit)<files.len(){Some(offset+limit)}else{None}}),
+                    json!({"total":files.len(),"files":files.iter().skip(offset).take(limit).map(|path|json!({"path":path,"dirty":self.dirty(path),"language":language(path)})).collect::<Vec<_>>(),"next_offset":if offset.saturating_add(limit)<files.len(){Some(offset+limit)}else{None}}),
                 )
             }
             "readit_read" => {
@@ -2511,26 +2534,18 @@ impl Reader {
                 let limit = number("limit", 100)?.min(300) as usize;
                 let mut matches = vec![];
                 let mut more = false;
-                for doc in &self.workspace.documents {
-                    if self.external.contains(&doc.path) {
-                        continue;
-                    }
-                    for (line, text) in doc.text.lines().enumerate() {
+                self.workspace.scan(|path, content| {
+                    for (line, text) in content.lines().enumerate() {
                         for (column, _) in text.match_indices(query) {
                             if matches.len() == limit {
                                 more = true;
-                                break;
+                                return false;
                             }
-                            matches.push(json!({"path":doc.path,"line":line+1,"column":text[..column].encode_utf16().count()+1,"text":text.chars().take(500).collect::<String>()}));
-                        }
-                        if more {
-                            break;
+                            matches.push(json!({"path":path,"line":line+1,"column":text[..column].encode_utf16().count()+1,"text":text.chars().take(500).collect::<String>()}));
                         }
                     }
-                    if more {
-                        break;
-                    }
-                }
+                    true
+                });
                 Ok(json!({"matches":matches,"truncated":more,"kind":"literal text search"}))
             }
             "readit_open" => {
@@ -2548,7 +2563,7 @@ impl Reader {
                 if end < start {
                     return Err("selection end must follow its start".into());
                 }
-                if self.workspace.index_of(&path).is_none() {
+                if !self.workspace.known(&path) {
                     self.workspace.documents.push(Document {
                         path: path.clone(),
                         text: text.clone(),
@@ -3039,7 +3054,7 @@ impl Reader {
     }
     fn reopen(&mut self, _: &ReopenTab, window: &mut Window, cx: &mut Context<Self>) {
         while let Some(path) = self.closed.pop() {
-            if self.workspace.index_of(&path).is_some() {
+            if self.workspace.known(&path) {
                 self.open(&path, None, true, window, cx);
                 break;
             }
@@ -3107,15 +3122,45 @@ impl Reader {
         cx.notify();
     }
     #[cfg_attr(feature = "performance", profiling::function)]
-    fn tree_entries(&self) -> Vec<readit::tree::Entry> {
+    fn tree_entries(&self) -> Rc<Vec<readit::tree::Entry>> {
+        // Rebuilding every redraw costs milliseconds once a project has thousands of files,
+        // so the result is kept until one of its inputs changes.
+        let mut hasher = DefaultHasher::new();
+        self.workspace.files.hash(&mut hasher);
+        self.collapsed.hash(&mut hasher);
+        self.directories.hash(&mut hasher);
+        self.untitled.hash(&mut hasher);
+        self.external.hash(&mut hasher);
+        for document in &self.workspace.documents {
+            document.path.hash(&mut hasher);
+        }
+        let key = hasher.finish();
+        if let Some((cached, entries)) = self.tree_cache.borrow().as_ref() {
+            if *cached == key {
+                return entries.clone();
+            }
+        }
         let paths = self
             .workspace
-            .documents
+            .files
             .iter()
-            .filter(|d| !self.untitled.contains(&d.path) && !self.external.contains(&d.path))
-            .map(|d| d.path.clone())
+            .chain(
+                self.workspace
+                    .documents
+                    .iter()
+                    .map(|d| &d.path)
+                    .filter(|p| !self.workspace.lists(p)),
+            )
+            .filter(|p| !self.untitled.contains(*p) && !self.external.contains(*p))
+            .cloned()
             .collect::<Vec<_>>();
-        readit::tree::entries_with_directories(&paths, &self.directories, &self.collapsed)
+        let entries = Rc::new(readit::tree::entries_with_directories(
+            &paths,
+            &self.directories,
+            &self.collapsed,
+        ));
+        *self.tree_cache.borrow_mut() = Some((key, entries.clone()));
+        entries
     }
     fn tree_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.explorer_focus.is_focused(window) {
@@ -3251,11 +3296,10 @@ impl Reader {
                             let active = this.tree_target.as_deref() == Some(path.as_str());
                             let badge = if this.dirty(&path) {
                                 "●"
-                            } else if this
-                                .workspace
-                                .index_of(&path)
-                                .is_some_and(|i| this.workspace.documents[i].changed())
-                            {
+                            } else if match this.workspace.index_of(&path) {
+                                Some(i) => this.workspace.documents[i].changed(),
+                                None => this.workspace.changed.contains(&path),
+                            } {
                                 "M"
                             } else {
                                 ""
@@ -3803,6 +3847,60 @@ mod pointer_tests {
             let (bottom, extent) = guide_placement(anchor, viewport, px(240.), Some(point(px(320.), px(2000.))));
             assert_eq!(bottom.y + extent.height, viewport.height - px(12.));
         }
+    }
+
+
+    #[gpui::test]
+    fn overview_reports_unread_files_as_current_until_they_actually_change(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("a-open.py"), "opened = 1\n").unwrap();
+        std::fs::write(directory.path().join("z-unread.py"), "target = 2\n").unwrap();
+        let workspace = Workspace::load(directory.path()).unwrap();
+        let root = workspace.root.clone();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::commands::init(cx);
+        });
+        let mut reader = None;
+        let (_, cx) = cx.add_window_view(|w, cx| {
+            let view = cx.new(|cx| Reader::new(workspace, false, w, cx));
+            reader = Some(view.clone());
+            gpui_component::Root::new(view, w, cx)
+        });
+        let reader = reader.unwrap();
+        cx.simulate_resize(size(px(1120.), px(700.)));
+        cx.update(|w, cx| {
+            reader.update(cx, |this, cx| {
+                let steps = serde_json::json!([
+                    {"id":"one","title":"入口","body":"開いているファイル",
+                        "path":"a-open.py","line":1,"column":1,"expected_text":"opened = 1"},
+                    {"id":"two","title":"対象","body":"まだ読んでいないファイル",
+                        "path":"z-unread.py","line":1,"column":1,"expected_text":"target = 2"}]);
+                let overview = serde_json::json!({"title":"未読","summary":"開いていないファイルを読む",
+                    "relationships":"a-open.py → z-unread.py","chapters":[
+                        {"title":"入口","summary":"最初の値","start_step":"one"},
+                        {"title":"対象","summary":"次の値","start_step":"two"}]});
+                this.control_call(
+                    &readit::control::Call {
+                        method: "readit_guide_load".into(),
+                        arguments: serde_json::json!({"workspace":root,"id":"unread-tour","event_sequence":0,"steps":steps,"overview":overview}),
+                    },
+                    w,
+                    cx,
+                )
+                .unwrap();
+                // The project lists the file but has never read it; that is not a source change.
+                // Only the first step's file is opened; the rest are listed but unread.
+                assert!(!this.buffers.contains_key("z-unread.py"));
+                let stale = |this: &Reader| {
+                    this.guide_steps_stale(this.guide_tour.as_ref().unwrap(), cx)
+                };
+                assert!(!stale(this));
+                std::fs::write(root.join("z-unread.py"), "target = 99\n").unwrap();
+                assert!(stale(this));
+            })
+        });
+        cx.run_until_parked();
     }
 
     #[gpui::test]

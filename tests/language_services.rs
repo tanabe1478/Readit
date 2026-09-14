@@ -189,3 +189,41 @@ fn rust_definition_and_references() {
             .any(|t| t.start.line == 1)
     );
 }
+
+#[test]
+#[ignore = "requires Eclipse JDT Language Server"]
+fn java_definition_references_symbols_and_hover() {
+    let f = Fixture::new("java");
+    let helpers = "package demo;\n\npublic class Helpers {\n    public static int original(int value) {\n        return value * 2;\n    }\n}\n";
+    let code = "package demo;\n\npublic class Main {\n    public static int run() {\n        return Helpers.original(3);\n    }\n}\n";
+    f.write("demo/Helpers.java", helpers);
+    f.write("demo/Main.java", code);
+    let mut service = Service::default();
+    let snapshot = f.snapshot(
+        "demo/Main.java",
+        code,
+        "original(3)",
+        vec![("demo/Helpers.java", helpers)],
+    );
+    let answer = service.query(Query::Definition, snapshot.clone()).unwrap();
+    println!("Java definition: {answer:?}");
+    assert!(
+        answer
+            .targets
+            .iter()
+            .any(|t| t.path.ends_with("Helpers.java") && t.start.line == 3)
+    );
+    let references = service.query(Query::References, snapshot.clone()).unwrap();
+    println!("Java references: {references:?}");
+    assert!(
+        references
+            .targets
+            .iter()
+            .any(|t| t.path.ends_with("Main.java") && t.start.line == 4)
+    );
+    let symbols = service.query(Query::Symbols, snapshot.clone()).unwrap();
+    assert!(symbols.targets.iter().any(|t| t.name.contains("run")));
+    let hover = service.query(Query::Hover, snapshot).unwrap();
+    println!("Java hover: {}", hover.information);
+    assert!(hover.information.contains("original"));
+}
