@@ -1,0 +1,11 @@
+import {
+  "readit/web/core",
+  "readit/web/lsp",
+  "moonbitlang/core/json",
+}
+
+supported_targets = "js"
+
+warnings = "-implicit_impl_as_method"
+
+pkgtype(kind: "executable")

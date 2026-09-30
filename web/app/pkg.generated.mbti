@@ -1,0 +1,23 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "readit/web/app"
+
+// Values
+pub fn boot(String) -> Unit
+
+pub fn copy_text(Bool) -> String
+
+pub fn has_unsaved() -> Bool
+
+pub fn on_event(String, String) -> Bool
+
+pub fn rpc_done(Int, Bool, String) -> Unit
+
+pub fn timer_fired(Int) -> Unit
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

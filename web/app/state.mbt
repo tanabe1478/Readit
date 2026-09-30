@@ -1,0 +1,474 @@
+// Window state, ported from the native Reader.
+
+///|
+priv struct Document {
+  mut path : String
+  /// What the file held when read or last saved.
+  mut disk : String
+  /// Comparison baseline: HEAD in a Git root, otherwise the text when opened.
+  mut before : String?
+  editor : @editor.Editor
+  mut scroll_top : Double
+}
+
+///|
+fn Document::text(self : Document) -> String {
+  self.editor.text
+}
+
+///|
+fn Document::dirty(self : Document) -> Bool {
+  self.disk != self.editor.text
+}
+
+///|
+fn Document::changed(self : Document) -> Bool {
+  match self.before {
+    Some(b) => b != self.editor.text
+    None => true
+  }
+}
+
+///|
+priv struct Workspace {
+  mut root : String
+  mut git : Bool
+  mut files : Array[String]
+  mut changed : Map[String, Unit]
+  mut directories : Array[String]
+  documents : Array[Document]
+  mut warnings : Array[String]
+}
+
+///|
+fn Workspace::index_of(self : Workspace, path : String) -> Int? {
+  for i, d in self.documents {
+    if d.path == path {
+      return Some(i)
+    }
+  }
+  None
+}
+
+///|
+fn Workspace::document(self : Workspace, path : String) -> Document? {
+  match self.index_of(path) {
+    Some(i) => Some(self.documents[i])
+    None => None
+  }
+}
+
+///|
+fn Workspace::lists(self : Workspace, path : String) -> Bool {
+  self.files.contains(path)
+}
+
+///|
+fn Workspace::known(self : Workspace, path : String) -> Bool {
+  self.index_of(path) is Some(_) || self.lists(path)
+}
+
+///|
+/// Update the listing from a server summary.
+fn Workspace::apply(self : Workspace, summary : Json) -> Unit {
+  guard summary is Object(o) else { return }
+  if o.get("root") is Some(String(root)) {
+    self.root = root
+  }
+  if o.get("git") is Some(git) {
+    self.git = git is True
+  }
+  self.files = strings(o.get("files"))
+  self.changed = Map([])
+  for p in strings(o.get("changed")) {
+    self.changed[p] = ()
+  }
+  self.directories = strings(o.get("directories"))
+  self.warnings = strings(o.get("warnings"))
+}
+
+///|
+fn strings(value : Json?) -> Array[String] {
+  match value {
+    Some(Array(items)) =>
+      items.filter_map(v => {
+        match v {
+          String(s) => Some(s)
+          _ => None
+        }
+      })
+    _ => []
+  }
+}
+
+///|
+fn Workspace::absolute(self : Workspace, path : String) -> String {
+  if @core.starts_with(path, "/") {
+    path
+  } else {
+    self.root + "/" + path
+  }
+}
+
+///|
+fn Workspace::name(self : Workspace) -> String {
+  @core.base_name(self.root)
+}
+
+///|
+priv struct Target {
+  path : String
+  line : Int
+  character : Int
+  end_line : Int
+  end_character : Int
+  name : String
+  detail : String
+  preview : String
+}
+
+///|
+fn Target::parse(value : Json) -> Target? {
+  match value {
+    {
+      "path": String(path),
+      "line": Number(line, ..),
+      "character": Number(character, ..),
+      "end_line": Number(end_line, ..),
+      "end_character": Number(end_character, ..),
+      "name": String(name),
+      "detail": String(detail),
+      "preview": String(preview),
+      ..
+    } =>
+      Some({
+        path,
+        line: line.to_int(),
+        character: character.to_int(),
+        end_line: end_line.to_int(),
+        end_character: end_character.to_int(),
+        name,
+        detail,
+        preview,
+      })
+    _ => None
+  }
+}
+
+///|
+/// What an LSP query was computed from: path, position and every loaded text.
+priv struct Snapshot {
+  root : String
+  path : String
+  line : Int
+  character : Int
+  documents : Array[(String, String)]
+}
+
+///|
+priv struct Guide {
+  id : String
+  root : String
+  path : String
+  source : String
+  start : Int
+  end : Int
+  title : String
+  body : String
+  mut question_open : Bool
+  mut pending_question : Int?
+  mut question : String?
+  mut answer : String?
+  mut question_error : String?
+  mut pending_next : Double?
+  /// Manual position after dragging, in viewport pixels.
+  mut position : (Double, Double)?
+  mut drag : (Double, Double, Double, Double)?
+}
+
+///|
+fn Guide::copy(self : Guide) -> Guide {
+  { ..self, }
+}
+
+///|
+priv struct Chapter {
+  title : String
+  summary : String
+  start_step : String
+}
+
+///|
+priv struct Overview {
+  title : String
+  summary : String
+  relationships : String
+  chapters : Array[Chapter]
+}
+
+///|
+fn Overview::to_json(self : Overview) -> Json {
+  {
+    "title": self.title,
+    "summary": self.summary,
+    "relationships": self.relationships,
+    "chapters": Json::array(
+      self.chapters.map(c => {
+        "title": c.title,
+        "summary": c.summary,
+        "start_step": c.start_step,
+      }),
+    ),
+  }
+}
+
+///|
+priv struct Tour {
+  id : String
+  mut steps : Array[Guide]
+  mut index : Int
+  mut visited : Int
+  mut overview : Overview?
+  seen : Array[String]
+}
+
+///|
+priv struct Pinned {
+  root : String
+  path : String
+  source : String
+  line : Int
+  editor : @editor.Editor
+  mut scroll_top : Double
+}
+
+///|
+priv enum Dialog {
+  Quick
+  Commands
+  WorkspaceSearch
+  Goto
+  NewFolder
+  Rename
+  SaveAs
+  Replace
+  Help
+  Navigation
+  Information
+  OpenFolder
+} derive(Eq)
+
+///|
+priv enum Pending {
+  Close(String)
+  CloseAll
+  Quit
+  Switch(String, String?)
+  Reload
+  Delete(String)
+}
+
+///|
+priv struct Location {
+  mut path : String
+  mut line : Int
+  mut column : Int
+}
+
+///|
+priv struct Pick {
+  label : String
+  detail : String
+  path : String?
+  line : Int?
+  command : String?
+  target : Int?
+}
+
+///|
+priv struct PointerPreview {
+  path : String
+  start : Int
+  end : Int
+  rect : Rect
+  definition : Bool
+  mut targets : Array[Target]
+  mut information : String
+  snapshot : Snapshot
+}
+
+///|
+priv struct ContextMenu {
+  x : Double
+  y : Double
+}
+
+///|
+priv struct Reader {
+  mut pinned : Pinned?
+  mut guide : Guide?
+  mut tour : Tour?
+  mut overview_visible : Bool
+  mut overview_tab : Bool
+  guide_events : Array[Json]
+  mut guide_sequence : Int
+  mut control_targets : Array[Target]
+  mut control_target_root : String
+  mut pointer : PointerPreview?
+  mut pointer_timer : Int?
+  mut pointer_serial : Int
+  mut popup : Rect?
+  mut nav_serial : Int
+  mut nav_busy : Bool
+  mut nav_visible : Bool
+  mut nav_title : String
+  mut nav_targets : Array[Target]
+  mut nav_information : String
+  mut nav_snapshot : Snapshot?
+  external : Map[String, Unit]
+  workspace : Workspace
+  tabs : Array[String]
+  mut selected : String?
+  untitled : Map[String, Unit]
+  closed : Array[String]
+  mut dialog : Dialog?
+  mut pending : Pending?
+  mut save_source : String?
+  mut saving_all : Bool
+  mut rename_source : String?
+  mut pick_index : Int
+  mut query : String
+  mut replacement : String
+  collapsed : Map[String, Unit]
+  mut tree_target : String?
+  mut reading_path : Bool
+  mut sidebar : Bool
+  mut sidebar_width : Double
+  mut sidebar_drag : (Double, Double)?
+  mut wrap : Bool
+  mut font_size : Double
+  mut compare : Bool
+  mut diff_rows : Array[@core.DiffRow]
+  mut message : String
+  history : Array[Location]
+  mut history_index : Int
+  mut focus : String
+  mut search_open : Bool
+  mut search_query : String
+  mut search_case : Bool
+  mut search_regex : Bool
+  mut search_index : Int
+  mut search_matches : Array[(Int, Int)]
+  mut search_error : String
+  mut search_key : String
+  mut workspace_picks : Array[Pick]
+  mut workspace_search_serial : Int
+  mut workspace_search_timer : Int?
+  mut menu : String?
+  mut context_menu : ContextMenu?
+  mut mouse_selecting : Bool
+  mut mouse_x : Double
+  mut mouse_y : Double
+  mut chord : String?
+  /// Disk text of unopened files, for stale checks without blocking rendering.
+  disk_cache : Map[String, String?]
+  mut disk_refresh : Double
+  mut control_socket : String
+  mut connected : Bool
+  mut superseded : Bool
+  mut quitting : Bool
+  mut loading : String?
+  mut guide_height : Double
+  mut guide_height_key : String
+}
+
+///|
+fn empty_workspace() -> Workspace {
+  {
+    root: "",
+    git: false,
+    files: [],
+    changed: Map([]),
+    directories: [],
+    documents: [],
+    warnings: [],
+  }
+}
+
+///|
+let reader : Reader = {
+  pinned: None,
+  guide: None,
+  tour: None,
+  overview_visible: false,
+  overview_tab: false,
+  guide_events: [],
+  guide_sequence: 0,
+  control_targets: [],
+  control_target_root: "",
+  pointer: None,
+  pointer_timer: None,
+  pointer_serial: 0,
+  popup: None,
+  nav_serial: 0,
+  nav_busy: false,
+  nav_visible: false,
+  nav_title: "",
+  nav_targets: [],
+  nav_information: "",
+  nav_snapshot: None,
+  external: Map([]),
+  workspace: empty_workspace(),
+  tabs: [],
+  selected: None,
+  untitled: Map([]),
+  closed: [],
+  dialog: None,
+  pending: None,
+  save_source: None,
+  saving_all: false,
+  rename_source: None,
+  pick_index: 0,
+  query: "",
+  replacement: "",
+  collapsed: Map([]),
+  tree_target: None,
+  reading_path: false,
+  sidebar: true,
+  sidebar_width: 245.0,
+  sidebar_drag: None,
+  wrap: false,
+  font_size: 14.0,
+  compare: false,
+  diff_rows: [],
+  message: "⌘P ファイルを開く · ⌘S 保存 · ⇧⌘P コマンド",
+  history: [],
+  history_index: 0,
+  focus: "editor",
+  search_open: false,
+  search_query: "",
+  search_case: false,
+  search_regex: false,
+  search_index: 0,
+  search_matches: [],
+  search_error: "",
+  search_key: "",
+  workspace_picks: [],
+  workspace_search_serial: 0,
+  workspace_search_timer: None,
+  menu: None,
+  context_menu: None,
+  mouse_selecting: false,
+  mouse_x: 0.0,
+  mouse_y: 0.0,
+  chord: None,
+  disk_cache: Map([]),
+  disk_refresh: 0.0,
+  control_socket: "",
+  connected: false,
+  superseded: false,
+  quitting: false,
+  loading: None,
+  guide_height: 0.0,
+  guide_height_key: "",
+}

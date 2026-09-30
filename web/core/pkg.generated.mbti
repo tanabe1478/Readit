@@ -1,0 +1,131 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "readit/web/core"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn base_name(String) -> String
+
+pub fn char_at(String, Int) -> Char?
+
+pub fn char_boundary(String, Int) -> Int
+
+pub fn char_count(String) -> Int
+
+pub fn contains(String, String) -> Bool
+
+pub fn diff_rows(String, String, Bool) -> Array[DiffRow]
+
+pub fn ends_with(String, String) -> Bool
+
+pub fn escape_html(String) -> String
+
+pub fn extension(String) -> String
+
+pub fn failure_text(String) -> String
+
+pub fn find_all(String, String) -> Array[Int]
+
+pub fn find_from(String, String, Int) -> Int
+
+pub fn is_symbol_char(Char) -> Bool
+
+pub fn is_word_char(Char) -> Bool
+
+pub fn language(String) -> String
+
+pub fn language_family(String) -> String
+
+pub fn language_id(String) -> String?
+
+pub fn lex_compare(String, String) -> Int
+
+pub fn line_end(String, Array[Int], Int) -> Int
+
+pub fn line_starts(String) -> Array[Int]
+
+pub fn lines(String) -> Array[String]
+
+pub fn lower(String) -> String
+
+pub fn next_char(String, Int) -> Int
+
+pub fn offset_at(String, Int, Int) -> Int raise Failure
+
+pub fn offset_of(String, Position) -> Int
+
+pub fn parent_of(String) -> String
+
+pub fn parse_natural(String) -> Int?
+
+pub fn position_at(String, Int) -> Position
+
+pub fn prev_char(String, Int) -> Int
+
+pub fn remap_path(String, String, String) -> String
+
+pub fn replace_all(String, String, String) -> String
+
+pub fn role(String) -> String
+
+pub fn role_order(String) -> Int
+
+pub fn slice(String, Int, Int) -> String
+
+pub fn sort_reading_order(Array[String]) -> Unit
+
+pub fn sort_strings(Array[String]) -> Unit
+
+pub fn split_newlines(String) -> Array[String]
+
+pub fn starts_pair(String, Int) -> Bool
+
+pub fn starts_with(String, String) -> Bool
+
+pub fn symbol_range(String, Int) -> (Int, Int)?
+
+pub fn take_chars(String, Int) -> String
+
+pub fn tree_entries(Array[String], Array[String], Map[String, Unit]) -> Array[TreeEntry]
+
+pub fn trim(String) -> String
+
+pub fn within(String, String) -> Bool
+
+pub fn word_left(String, Int) -> Int
+
+pub fn word_right(String, Int) -> Int
+
+// Errors
+
+// Types and methods
+pub(all) enum DiffKind {
+  Context
+  Added
+  Removed
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DiffRow {
+  old : Int?
+  new : Int?
+  text : String
+  kind : DiffKind
+} derive(@debug.Debug)
+
+pub(all) struct Position {
+  line : Int
+  character : Int
+} derive(Eq, @debug.Debug)
+
+pub(all) struct TreeEntry {
+  path : String
+  name : String
+  depth : Int
+  file : Int?
+} derive(@debug.Debug)
+
+// Type aliases
+
+// Traits

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="readit-token" content="__READIT_TOKEN__">
+<title>Readit</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="glue.js"></script>
+</head>
+<body>
+<div id="app" tabindex="-1">
+  <header id="topbar"></header>
+  <div id="menu-layer"></div>
+  <div id="main">
+    <aside id="sidebar" tabindex="0">
+      <div id="sidebar-head"></div>
+      <div id="tree-scroll" class="scroll"></div>
+      <div id="sidebar-foot"></div>
+      <div id="sidebar-resize"></div>
+    </aside>
+    <section id="center">
+      <div id="tabs"></div>
+      <div id="overview" class="scroll" style="display:none"></div>
+      <div id="file-column">
+        <div id="pathbar"></div>
+        <div id="navbar"></div>
+        <div id="editor-area">
+          <div id="search-bar" style="display:none">
+            <input id="search-input" class="input" placeholder="ファイル内を検索" autocomplete="off" spellcheck="false">
+            <div id="search-controls"></div>
+          </div>
+          <div id="editor-scroll" class="scroll code-scroll"><div id="editor-content"></div></div>
+          <div id="diff-scroll" class="scroll" style="display:none"></div>
+          <div id="empty-state" style="display:none"></div>
+        </div>
+      </div>
+    </section>
+    <aside id="pinned" style="display:none">
+      <div id="pinned-head"></div>
+      <div id="pinned-scroll" class="scroll code-scroll"><div id="pinned-content"></div></div>
+    </aside>
+  </div>
+  <div id="navpanel" style="display:none"></div>
+  <footer id="status"></footer>
+  <div id="pointer-layer"></div>
+  <div id="guide" class="guide" style="display:none">
+    <div id="guide-main"></div>
+    <div id="guide-form"></div>
+    <div id="guide-after"></div>
+  </div>
+  <div id="overlay" style="display:none">
+    <div id="dialog" tabindex="-1">
+      <div id="dialog-shell"></div>
+      <div id="dialog-body"></div>
+    </div>
+  </div>
+  <div id="context-layer"></div>
+  <textarea id="editor-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="エディター入力"></textarea>
+  <pre id="fatal"></pre>
+</div>
+</body>
+</html>

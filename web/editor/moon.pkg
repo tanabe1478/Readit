@@ -1,0 +1,5 @@
+import {
+  "readit/web/core",
+}
+
+warnings = "-implicit_impl_as_method"

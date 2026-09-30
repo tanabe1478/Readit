@@ -1,0 +1,78 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "readit/web/editor"
+
+import {
+  "readit/web/core",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) enum Amount {
+  Char
+  Word
+  Line
+}
+
+pub struct Editor {
+  mut text : String
+  mut starts : Array[Int]
+  mut anchor : Int
+  mut head : Int
+  mut goal : Int?
+  mut version : Int
+  mut read_only : Bool
+  mut indent_unit : String
+  // private fields
+}
+pub fn Editor::backspace(Self, Amount) -> Bool
+pub fn Editor::break_undo_group(Self) -> Unit
+pub fn Editor::can_undo(Self) -> Bool
+pub fn Editor::delete_forward(Self, Amount) -> Bool
+pub fn Editor::has_selection(Self) -> Bool
+pub fn Editor::indent(Self) -> Bool
+pub fn Editor::insert(Self, String) -> Bool
+pub fn Editor::line_count(Self) -> Int
+pub fn Editor::line_end(Self, Int) -> Int
+pub fn Editor::line_of(Self, Int) -> Int
+pub fn Editor::line_start(Self, Int) -> Int
+pub fn Editor::line_text(Self, Int) -> String
+pub fn Editor::move_cursor(Self, Motion, selecting? : Bool) -> Unit
+pub fn Editor::new(String) -> Self
+pub fn Editor::newline(Self) -> Bool
+pub fn Editor::offset_at(Self, Int, Int) -> Int
+pub fn Editor::outdent(Self) -> Bool
+pub fn Editor::position(Self) -> @core.Position
+pub fn Editor::redo(Self) -> Bool
+pub fn Editor::replace_range(Self, Int, Int, String, kind? : String) -> Bool
+pub fn Editor::select(Self, Int, Int) -> Unit
+pub fn Editor::select_all(Self) -> Unit
+pub fn Editor::select_line(Self, Int) -> Unit
+pub fn Editor::select_word_at(Self, Int) -> Unit
+pub fn Editor::selected_text(Self) -> String
+pub fn Editor::selection(Self) -> (Int, Int)
+pub fn Editor::set_cursor(Self, Int, selecting? : Bool) -> Unit
+pub fn Editor::set_read_only(Self, Bool) -> Unit
+pub fn Editor::set_value(Self, String) -> Unit
+pub fn Editor::undo(Self) -> Bool
+
+pub(all) enum Motion {
+  Left
+  Right
+  WordLeft
+  WordRight
+  LineStart
+  LineEnd
+  Up
+  Down
+  DocStart
+  DocEnd
+  PageUp(Int)
+  PageDown(Int)
+}
+
+// Type aliases
+
+// Traits

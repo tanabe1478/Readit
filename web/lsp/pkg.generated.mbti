@@ -1,0 +1,62 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "readit/web/lsp"
+
+import {
+  "moonbitlang/core/debug",
+  "readit/web/core",
+}
+
+// Values
+pub fn configuration(String) -> Json
+
+pub fn describe(Target, String) -> Unit
+
+pub fn hover_text(Json) -> String
+
+pub let max_message : Int
+
+pub fn path_to_uri(String) -> String
+
+pub fn settings() -> Json
+
+pub fn symbols(Json, String) -> Array[Target]
+
+pub fn targets(Json) -> Array[Target]
+
+pub fn uri_to_path(String) -> String?
+
+// Errors
+
+// Types and methods
+pub struct Framer {
+  mut buffer : String
+}
+pub fn Framer::feed(Self, String) -> Array[String] raise Failure
+pub fn Framer::new() -> Self
+
+pub(all) enum Query {
+  Definition
+  TypeDefinition
+  Implementation
+  References
+  Symbols
+  Hover
+} derive(Eq, @debug.Debug)
+pub fn Query::capability(Self) -> String
+pub fn Query::method_name(Self) -> String
+pub fn Query::name(Self) -> String
+pub fn Query::parse(String) -> Self?
+pub fn Query::title(Self) -> String
+
+pub(all) struct Target {
+  path : String
+  start : @core.Position
+  end : @core.Position
+  mut name : String
+  mut detail : String
+  mut preview : String
+} derive(@debug.Debug)
+
+// Type aliases
+
+// Traits

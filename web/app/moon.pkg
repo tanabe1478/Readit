@@ -1,0 +1,27 @@
+import {
+  "readit/web/core",
+  "readit/web/editor",
+  "readit/web/lsp",
+  "moonbitlang/core/json",
+}
+
+supported_targets = "wasm-gc"
+
+warnings = "-implicit_impl_as_method"
+
+options(
+  link: {
+    "wasm-gc": {
+      "exports": [
+        "boot",
+        "on_event",
+        "rpc_done",
+        "timer_fired",
+        "copy_text",
+        "has_unsaved",
+      ],
+      "use-js-builtin-string": true,
+      "imported-string-constants": "_",
+    },
+  },
+)

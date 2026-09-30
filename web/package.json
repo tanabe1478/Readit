@@ -1,0 +1,32 @@
+{
+  "name": "readit-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/start.mjs",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "web-tree-sitter": "0.25.10",
+    "tree-sitter-python": "0.25.0",
+    "tree-sitter-rust": "0.24.0",
+    "tree-sitter-javascript": "0.25.0",
+    "tree-sitter-typescript": "0.23.2",
+    "tree-sitter-json": "0.24.8",
+    "tree-sitter-go": "0.25.0",
+    "tree-sitter-java": "0.23.5",
+    "tree-sitter-html": "0.23.2",
+    "tree-sitter-css": "0.25.0",
+    "tree-sitter-bash": "0.25.1",
+    "tree-sitter-c": "0.24.1",
+    "tree-sitter-cpp": "0.23.4",
+    "tree-sitter-ruby": "0.23.1",
+    "@tree-sitter-grammars/tree-sitter-toml": "0.7.0",
+    "@tree-sitter-grammars/tree-sitter-yaml": "0.7.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

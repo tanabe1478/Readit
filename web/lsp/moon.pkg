@@ -1,0 +1,6 @@
+import {
+  "readit/web/core",
+  "moonbitlang/core/encoding/utf8",
+}
+
+warnings = "-implicit_impl_as_method"
