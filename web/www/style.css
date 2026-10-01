@@ -56,6 +56,7 @@ textarea.input { resize: vertical; }
 .tree-row.active { background: var(--active); }
 .tree-icon { width: 18px; flex-shrink: 0; font-size: 10px; color: #8fb4d4; }
 .tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.brand .label { font-size: 11px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--accent); color: var(--accent); }
 .badge { flex-shrink: 0; color: var(--accent); font-size: 11px; }
 .route { margin: 4px 8px; padding: 10px; border-radius: 6px; cursor: pointer; }
 .route:hover { background: #233a32; }

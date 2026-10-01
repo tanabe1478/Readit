@@ -2,19 +2,27 @@
 // guide bubbles into the session, so the user does not have to announce them.
 import path from "node:path";
 import os from "node:os";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ReaditWatcher } from "./watcher.ts";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const socket = process.env.READIT_SOCKET || path.join(os.homedir(), ".readit/control.sock");
 const python = process.env.READIT_PYTHON || "python3";
+// By default this session launches a Readit of its own, so other sessions keep
+// their own windows and tours. READIT_SOCKET instead joins an existing Readit.
+const shared = process.env.READIT_SOCKET;
+const socket = shared ||
+  path.join(os.homedir(), ".readit/sessions", `pi-${process.pid}-${randomBytes(2).toString("hex")}.sock`);
+const mcpArgs = shared
+  ? ["--socket", shared]
+  : ["--launch", "--socket", socket, "--label", "pi", "--workspace", process.cwd()];
 
 export default function readit(pi: ExtensionAPI): void {
   // The same MCP server Claude Code uses. An entry named "readit" in mcp.json takes precedence.
   pi.registerMcpServer("readit", {
     command: python,
-    args: [path.join(repo, "tools/readit_mcp.py"), "--socket", socket],
+    args: [path.join(repo, "tools/readit_mcp.py"), ...mcpArgs],
     exposure: "direct",
   });
 

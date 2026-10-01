@@ -22,6 +22,8 @@ npm start -- /absolute/path/to/repository
 | `--port N` | 待受ポート。`0` で空いているポートを使う |
 | `--control-socket PATH` | MCP 用の Unix socket。親ディレクトリは権限 700 |
 | `--no-open` | ブラウザを開かない |
+| `--label NAME` | 画面の名前。タブのタイトルとヘッダーに出る |
+| `--exit-with-stdin` | 標準入力が閉じたら終了する。起動した側のプロセスと一緒に止めるため |
 
 `moon` が PATH にない場合、ビルドは `mise where http:moonbit@0.10.14` から探します。`MOON` 環境変数でも指定できます。
 
@@ -33,6 +35,8 @@ npm start -- /absolute/path/to/repository
 npm start -- /path/to/repository --control-socket ~/.readit/control.sock
 python3 ../tools/readit_mcp.py --socket ~/.readit/control.sock
 ```
+
+AI のセッションごとに専用の Readit を使う場合は、`python3 ../tools/readit_mcp.py --launch` だけを登録します。最初のツール呼び出しで Readit を起動して画面を開き、セッションの終了とともに止めます（[docs/mcp.md](../docs/mcp.md#セッションごとにreaditを起動する)）。
 
 要求はブラウザで開いている画面が処理します。画面を閉じている間は「Readit is not open in a browser」を返します。複数のタブで開いた場合は、最後に開いたタブが応答します。
 

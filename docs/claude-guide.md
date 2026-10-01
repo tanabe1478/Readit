@@ -6,6 +6,17 @@ Claudeがコードを調べて説明を作り、MCP経由でReaditの概観タ�
 
 ## 1. 接続を準備する
 
+### いちばん簡単な方法
+
+Claude Codeなら、MCPサーバーを `--launch` 付きで登録するだけでよい。Readitを先に起動する必要はない。最初にReaditのツールを使ったとき、そのプロジェクトのフォルダを開いた画面がブラウザに開き、セッションが終わると止まる。セッションごとに別の画面とツアーになる。
+
+```sh
+claude mcp add --transport stdio --scope user readit -- \
+  python3 /absolute/path/to/Readit/tools/readit_mcp.py --launch
+```
+
+事前に `web/` で `npm install` と `npm run build` を実行しておく。下の「Readitを起動する」以降は、手で起動した画面に接続する場合の手順。
+
 ### Readitを起動する
 
 Readitを置いた場所を `READIT_DIR`、説明したいリポジトリを `TARGET_REPO` に設定する。以下のパスは自分の環境に置き換える。

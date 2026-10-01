@@ -447,6 +447,8 @@ priv struct Reader {
   disk_cache : Map[String, String?]
   mut disk_refresh : Double
   mut control_socket : String
+  /// Window name from the server's --label.
+  mut label : String
   mut connected : Bool
   mut superseded : Bool
   mut quitting : Bool
@@ -540,6 +542,7 @@ let reader : Reader = {
   disk_cache: Map([]),
   disk_refresh: 0.0,
   control_socket: "",
+  label: "",
   connected: false,
   superseded: false,
   quitting: false,

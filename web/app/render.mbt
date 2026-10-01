@@ -137,7 +137,7 @@ fn render_topbar() -> String {
   }
   out.write_string("</div>")
   out.write_string(
-    "<div class=\"brand\"><span class=\"logo\">readit</span>\{caption(reader.workspace.name())}</div>",
+    "<div class=\"brand\"><span class=\"logo\">readit</span>\{if reader.label == "" { "" } else { "<span class=\"label\">\{e(reader.label)}</span>" }}\{caption(reader.workspace.name())}</div>",
   )
   out.write_string("<div class=\"top-actions\">")
   if reader.tour is Some(t) && t.overview is Some(_) {

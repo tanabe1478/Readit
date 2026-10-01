@@ -137,6 +137,8 @@ cd web && npm start -- /absolute/path/to/repository --control-socket ~/.readit/c
 [接続設定と操作一覧](docs/mcp.md)、[読解ガイド用skill](skills/readit-guide/SKILL.md)を参照してください。
 MCP設定やskillのインストール先はAIクライアントごとに指定します。設定ファイルを自動で変更することはありません。
 
+MCPサーバーを `--launch` 付きで登録すると、AIのセッションごとに専用のReaditを起動します。最初の操作で作業フォルダを開いたタブがブラウザに開き、セッションの終了とともに止まります。ClaudeとpiのセッションがそれぞれのReaditの画面とツアーを同時に使えます。詳しくは [MCP操作](docs/mcp.md#セッションごとにreaditを起動する) を参照してください。
+
 吹き出しから送った質問は、チャットで知らせなくてもAIに届きます。Claude Codeはskillの手順で `tools/readit_wait.py` をバックグラウンドで実行し、piは [integrations/pi](integrations/pi/README.md) のパッケージ（MCPサーバー・skill・質問の受け渡しをまとめたもの）を使います。詳しくは [MCP操作](docs/mcp.md#質問をaiへ自動で届ける) を参照してください。
 
 ファイル名による「背景・契約・実装・検証・設定」の仮の読む順番も利用できます。

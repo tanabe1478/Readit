@@ -3,11 +3,14 @@ let help : String =
   #|Readit — code reading editor (browser)
   #|
   #|readit-web [repository-directory] [--control-socket /private/directory/control.sock]
-  #|           [--port 7420] [--web-root DIR] [--tools DIR]
+  #|           [--port 7420] [--web-root DIR] [--tools DIR] [--label NAME]
+  #|           [--exit-with-stdin]
   #|readit-web --demo
   #|
   #|Serves the editor on http://127.0.0.1 only. A local MCP client can guide
-  #|the visible window when --control-socket is set.
+  #|the visible window when --control-socket is set. --label names the window,
+  #|for example after the AI session that started it. --exit-with-stdin stops the
+  #|server when its standard input closes, i.e. when the process that started it ends.
 
 ///|
 fn main {
@@ -19,6 +22,8 @@ fn main {
   let mut port = 7420
   let mut web_root = ""
   let mut tools = ""
+  let mut label = ""
+  let mut exit_with_stdin = false
   let mut i = 0
   let value = (name : String) => {
     i += 1
@@ -49,6 +54,8 @@ fn main {
         }
       "--web-root" => web_root = value("--web-root")
       "--tools" => tools = value("--tools")
+      "--label" => label = value("--label")
+      "--exit-with-stdin" => exit_with_stdin = true
       "--demo" => demo = true
       arg =>
         if !@core.starts_with(arg, "-") && directory == "" {
@@ -101,6 +108,7 @@ fn main {
     control: None,
     control_path: socket,
     demo,
+    label,
   }
   let start_http = () => {
     http_listen(
@@ -124,12 +132,16 @@ fn main {
       },
     )
   }
-  on_signal(() => {
+  let stop = () => {
     server.service.shutdown()
     if server.control is Some(c) {
       c.close()
     }
-  })
+  }
+  on_signal(stop)
+  if exit_with_stdin {
+    on_stdin_end(stop)
+  }
   if socket == "" {
     start_http()
     return

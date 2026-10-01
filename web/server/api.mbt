@@ -11,6 +11,8 @@ struct Server {
   mut control : Control?
   control_path : String
   demo : Bool
+  /// Window name shown in the title, such as the AI session that started it.
+  label : String
 }
 
 ///|
@@ -86,6 +88,7 @@ fn Server::dispatch(
         "demo": self.demo,
         "url": self.url,
         "control_socket": self.control_path,
+        "label": self.label,
         "platform": platform(),
       })
     "workspace.open" => {

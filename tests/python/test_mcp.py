@@ -126,6 +126,22 @@ class ProtocolTests(unittest.TestCase):
         for overview in bad:
             self.rejects("readit_guide_load", self.tour_args([step], overview))
 
+    def test_launch_mode_names_the_session_after_the_client(self):
+        launcher = mcp.Launcher(None, "/repo", None)
+        server = mcp.Server(None, launcher)
+        server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                       "params": {"protocolVersion": "2025-11-25", "clientInfo": {"name": "Claude Code"}}})
+        self.assertEqual(launcher.label, "Claude Code")
+        path = mcp.Launcher.default_socket(launcher.label)
+        self.assertTrue(pathlib.Path(path).name.startswith("claude-code-"))
+        self.assertEqual(pathlib.Path(path).parent, pathlib.Path.home() / ".readit/sessions")
+        self.assertLess(len(path.encode()), 104)  # Unix socket path limit on macOS.
+        # An explicit label wins over the client's name.
+        named = mcp.Launcher(None, "/repo", "pi")
+        mcp.Server(None, named).handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                         "params": {"protocolVersion": "2025-11-25", "clientInfo": {"name": "other"}}})
+        self.assertEqual(named.label, "pi")
+
     def test_parse_error_and_uninitialized_calls(self):
         output = io.StringIO()
         mcp.serve("/missing", io.BytesIO(b'not-json\n[]\n'), output)

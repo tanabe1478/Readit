@@ -12,7 +12,9 @@ pi から Readit を使うためのパッケージです。次の 3 つをまと
 pi install /absolute/path/to/Readit/integrations/pi
 ```
 
-Readit は `--control-socket ~/.readit/control.sock` で起動します（ネイティブ版は `readit` ランチャー、Web 版は `web/` の `npm start`）。別の socket を使う場合は `READIT_SOCKET` を設定します。Python は `READIT_PYTHON`（既定は `python3`）で変えられます。
+pi のセッションごとに専用の Readit を使います。最初に Readit のツールを使ったときに、pi を起動したフォルダを開いた画面がブラウザに開き、セッションの終了とともに止まります（`readit_mcp.py --launch`）。画面のヘッダーには `pi` と出ます。Claude Code など他のセッションの画面やツアーとは混ざりません。
+
+手で起動した Readit を使いたい場合は、その socket を `READIT_SOCKET` に設定します（例: `READIT_SOCKET=~/.readit/control.sock`）。この場合は起動せず、その画面につなぎます。Python は `READIT_PYTHON`（既定は `python3`）で変えられます。
 
 ## 使い方
 

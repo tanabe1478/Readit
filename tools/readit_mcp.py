@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
-"""MCP stdio server for an already-running Readit window. Python standard library only."""
+"""MCP stdio server for Readit. Python standard library only.
+
+By default it controls an already-running Readit through --socket. With --launch,
+it starts a Readit of its own for this AI session on first use, opens it in the
+browser, and stops it when the session ends, so several sessions can each guide
+their own window and tour.
+"""
 import argparse
 import json
+import os
+import re
+import secrets
+import shlex
+import signal
 import socket
+import subprocess
 import sys
+import time
 
 VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 MAX_FRAME = 262_144
@@ -181,12 +194,12 @@ def validate_tour(arguments, revising):
         raise RpcError(-32602, "claim ids must be unique")
 
 
-def editor_call(endpoint, name, arguments):
+def editor_call(endpoint, name, arguments, timeout=60):
     payload = json.dumps({"method": name, "arguments": arguments}, ensure_ascii=False).encode() + b"\n"
     if len(payload) > MAX_FRAME:
         raise ValueError("request is too large")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(60)
+        client.settimeout(timeout)
         client.connect(endpoint)
         client.sendall(payload)
         with client.makefile("rb") as stream:
@@ -199,11 +212,125 @@ def editor_call(endpoint, name, arguments):
     return data["result"]
 
 
-class Server:
-    def __init__(self, endpoint):
+class Launcher:
+    """A Readit web server owned by this MCP process."""
+
+    NOT_OPEN = "Readit is not open in a browser"
+
+    def __init__(self, endpoint, workspace, label, web=None, node=None, opener=None, wait=20.0):
         self.endpoint = endpoint
+        self.workspace = workspace
+        self.label = label
+        self.web = web or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+        self.node = node or os.environ.get("READIT_NODE") or "node"
+        self.opener = opener or os.environ.get("READIT_OPEN") or ("open" if sys.platform == "darwin" else "xdg-open")
+        self.wait = wait
+        self.child = None
+        self.url = None
+        self.opened = 0.0
+        self.answered = False
+
+    @staticmethod
+    def default_socket(label):
+        name = re.sub(r"[^a-z0-9-]+", "-", label.lower()).strip("-")[:24] or "session"
+        return os.path.expanduser(f"~/.readit/sessions/{name}-{os.getpid()}-{secrets.token_hex(2)}.sock")
+
+    def ensure(self):
+        """Start the server if it is not running, then wait until a window answers."""
+        if self.endpoint is None:
+            self.endpoint = self.default_socket(self.label or "session")
+        if (self.child is None or self.child.poll() is not None) and not self.listening():
+            self.start()
+        if not self.window_ready():
+            self.open_window()
+            deadline = time.monotonic() + self.wait
+            while not self.window_ready():
+                if time.monotonic() > deadline:
+                    raise ValueError(f"opened {self.url} but no browser window answered; open it manually")
+                time.sleep(0.2)
+
+    def listening(self):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                probe.connect(self.endpoint)
+            return True
+        except OSError:
+            return False
+
+    def window_ready(self):
+        try:
+            # A tab closed a moment ago can still look attached; it just never answers.
+            editor_call(self.endpoint, "readit_state", {}, timeout=5)
+            self.answered = True
+            return True
+        except socket.timeout:
+            return False
+        except ValueError as error:
+            if self.NOT_OPEN in str(error):
+                return False
+            raise
+
+    def start(self):
+        directory = os.path.dirname(self.endpoint)
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        os.chmod(directory, 0o700)
+        if os.path.exists(self.endpoint):
+            os.unlink(self.endpoint)  # Nothing listens on it: left behind by a crashed server.
+        server = os.path.join(self.web, "dist/server.js")
+        if not os.path.exists(server):
+            raise ValueError(f"Readit web is not built: run npm install and npm run build in {self.web}")
+        log_path = os.path.splitext(self.endpoint)[0] + ".log"
+        with open(log_path, "w") as log:
+            self.child = subprocess.Popen(
+                [self.node, server, "--web-root", self.web, "--port", "0", "--label", self.label,
+                 "--exit-with-stdin", self.workspace, "--control-socket", self.endpoint],
+                # The server exits when this pipe closes, including when this process is killed.
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log, start_new_session=True)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            with open(log_path) as log:
+                found = re.search(r"Readit: (http://127\.0\.0\.1:\d+/)", log.read())
+            if found:
+                self.url = found.group(1)
+                return
+            if self.child.poll() is not None:
+                break
+            time.sleep(0.1)
+        with open(log_path) as log:
+            detail = log.read().strip()
+        self.close()
+        raise ValueError(f"Readit did not start: {detail or 'no output'}")
+
+    def open_window(self):
+        # A closed tab is reopened, but not again while the last one is still loading.
+        if self.url is None or (not self.answered and time.monotonic() - self.opened < 10):
+            return
+        self.opened = time.monotonic()
+        self.answered = False
+        subprocess.Popen([*shlex.split(self.opener), self.url], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def close(self):
+        if self.child and self.child.poll() is None:
+            self.child.terminate()
+            try:
+                self.child.wait(5)
+            except subprocess.TimeoutExpired:
+                self.child.kill()
+        self.child = None
+
+
+class Server:
+    def __init__(self, endpoint, launcher=None):
+        self._endpoint = endpoint
+        self.launcher = launcher
         self.initialized = False
         self.ready = False
+
+    @property
+    def endpoint(self):
+        # A launched Readit picks its socket once the client's name is known.
+        return self.launcher.endpoint if self.launcher else self._endpoint
 
     def handle(self, message):
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
@@ -224,6 +351,10 @@ class Server:
             if not isinstance(params.get("protocolVersion"), str):
                 raise RpcError(-32602, "protocolVersion is required")
             self.initialized = True
+            client = params.get("clientInfo")
+            if self.launcher and self.launcher.label is None:
+                name = client.get("name") if isinstance(client, dict) else None
+                self.launcher.label = name if isinstance(name, str) and name else "session"
             version = params["protocolVersion"] if params["protocolVersion"] in VERSIONS else VERSIONS[0]
             return {"protocolVersion": version, "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "readit", "version": "0.4.0"},
@@ -243,15 +374,20 @@ class Server:
             if spec["name"] in ("readit_guide_load", "readit_guide_revise"):
                 validate_tour(arguments, spec["name"] == "readit_guide_revise")
             try:
+                if self.launcher:
+                    self.launcher.ensure()
                 result = editor_call(self.endpoint, spec["name"], arguments)
             except (OSError, ValueError, KeyError) as error:
                 return {"content": [{"type": "text", "text": str(error)}], "isError": True}
+            if spec["name"] == "readit_state" and isinstance(result, dict):
+                # tools/readit_wait.py needs the same socket to wait for this window's questions.
+                result["control_socket"] = self.endpoint
             return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}], "structuredContent": result, "isError": False}
         raise RpcError(-32601, "method not found")
 
 
-def serve(endpoint, source, output):
-    server = Server(endpoint)
+def serve(endpoint, source, output, launcher=None):
+    server = Server(endpoint, launcher)
     while True:
         line = source.readline(MAX_FRAME + 1)
         if not line:
@@ -282,6 +418,21 @@ def serve(endpoint, source, output):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--socket", required=True, help="Readit's --control-socket path")
+    parser.add_argument("--socket", help="Readit's --control-socket path (required without --launch)")
+    parser.add_argument("--launch", action="store_true",
+                        help="Start a Readit for this session on first use and stop it on exit")
+    parser.add_argument("--workspace", default=os.getcwd(), help="Folder a launched Readit opens (default: current directory)")
+    parser.add_argument("--label", help="Window name of a launched Readit (default: the MCP client's name)")
     options = parser.parse_args()
-    serve(options.socket, sys.stdin.buffer, sys.stdout)
+    if not options.launch and not options.socket:
+        parser.error("--socket is required unless --launch is given")
+    launcher = None
+    if options.launch:
+        launcher = Launcher(options.socket, os.path.abspath(options.workspace), options.label)
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
+    try:
+        serve(options.socket, sys.stdin.buffer, sys.stdout, launcher)
+    finally:
+        if launcher:
+            launcher.close()

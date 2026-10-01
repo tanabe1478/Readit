@@ -11,7 +11,7 @@ Readit is the user's shared view of the source. Use short, source-anchored bubbl
 
 Use `readit_state` first. It returns the active workspace, file, cursor, selected text, viewport and unsaved flags. Pass that exact `workspace` to later calls. If the workspace changes or a request reports stale state, read the state again before acting.
 
-The MCP server must already be connected to a running Readit window. If the tools are missing, explain that connection is needed; do not claim to have moved the editor. The project supplies `tools/readit_mcp.py`, launched with `--socket` matching the editor's `--control-socket` option.
+The MCP server must be connected to Readit. If the tools are missing, explain that connection is needed; do not claim to have moved the editor. The project supplies `tools/readit_mcp.py`. Started with `--socket`, it controls a Readit already running with that `--control-socket`. Started with `--launch`, it starts a Readit of its own for this session on the first tool call, in the session's working directory, opens it in the browser (the first call can take a few seconds), and stops it when the session ends; each session then has its own window and tour. `readit_state.control_socket` names the socket in either case.
 
 ## Walk through the source
 
@@ -39,7 +39,7 @@ For questions, poll `readit_guide_events` while actively available. A `question`
 
 The user should not have to announce in the chat that they sent a question. While you are available after loading a tour or showing a bubble, keep one waiter running for the window:
 
-- Clients that run a command in the background and resume you when it exits (Claude Code: Bash with `run_in_background`): start `python3 <Readit>/tools/readit_wait.py --stop-when-idle` in the background. `<Readit>` is the repository that provides `tools/readit_mcp.py`; the default socket is `$READIT_SOCKET` or `~/.readit/control.sock`, and `--socket` overrides it to match the MCP server. Never run it in the foreground, which would block the conversation. When it exits it prints one JSON line:
+- Clients that run a command in the background and resume you when it exits (Claude Code: Bash with `run_in_background`): start `python3 <Readit>/tools/readit_wait.py --socket <control_socket> --stop-when-idle` in the background, with `control_socket` from `readit_state`, so you wait for this session's window only. `<Readit>` is the repository that provides `tools/readit_mcp.py`. Never run it in the foreground, which would block the conversation. When it exits it prints one JSON line:
   - `question`: answer it (`readit_guide_revise` for a tour, `readit_guide_answer` for a single bubble), then start the waiter again with `--after <latest_sequence>`.
   - `next`: continue a single-bubble walkthrough, then restart it the same way.
   - `timeout`: restart it with the same `--after`.

@@ -103,6 +103,11 @@ pub extern "js" fn clear_timeout(id : Int) -> Unit = "(id) => { const R = global
 pub extern "js" fn on_signal(f : () -> Unit) -> Unit = "(f) => { for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => { f(); process.exit(0); }); process.on('exit', () => f()); }"
 
 ///|
+/// Run `f` and exit once standard input closes, so a server started by another
+/// process stops with it even when that process is killed.
+pub extern "js" fn on_stdin_end(f : () -> Unit) -> Unit = "(f) => { const done = () => { f(); process.exit(0); }; process.stdin.on('end', done); process.stdin.on('close', done); process.stdin.on('error', done); process.stdin.resume(); }"
+
+///|
 /// The directory holding the running server script: web/_build/js/<mode>/build/server.
 pub extern "js" fn script_dir() -> String = "() => { const p = process.argv[1] || ''; return globalThis.__readit.path.dirname(globalThis.__readit.fs.realpathSync(p)); }"
 

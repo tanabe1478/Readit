@@ -49,6 +49,9 @@ pub fn boot(config : String) -> Unit {
     { "workspace": summary, "control_socket": String(socket), .. } => {
       reader.workspace.apply(summary)
       reader.control_socket = socket
+      if parsed is { "label": String(label), .. } {
+        reader.label = label
+      }
       for w in reader.workspace.warnings {
         js_log(w)
       }
@@ -561,10 +564,17 @@ fn render() -> Unit {
   refresh_search()
   let overlay = dialog_open()
   js_set_title(
-    if reader.workspace.root == "" {
-      "Readit"
-    } else {
-      "\{reader.workspace.name()} — Readit"
+    {
+      let name = if reader.workspace.root == "" {
+        "Readit"
+      } else {
+        "\{reader.workspace.name()} — Readit"
+      }
+      if reader.label == "" {
+        name
+      } else {
+        "[\{reader.label}] \{name}"
+      }
     },
   )
   js_set_html("topbar", render_topbar())

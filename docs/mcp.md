@@ -35,6 +35,26 @@ Web版の画面用のHTTPは `127.0.0.1` だけで待ち受け、起動ごとの
 旧版（ネイティブ版）は `./artifacts/Readit.app/Contents/MacOS/Readit --control-socket ...` で同じように接続できます。
 別のReaditには別のsocketを指定します。既存のsocketは上書きしません。クラッシュで残った場合は、そのReaditプロセスが終了していることを確認してからsocketファイルを削除してください。通常終了時には自動で削除します。
 
+## セッションごとにReaditを起動する
+
+`readit_mcp.py` に `--launch` を付けると、そのMCPサーバー（＝AIのセッション）専用のReaditを起動します。複数のセッションが、それぞれ別の画面・ツアー・質問を同時に扱えます。
+
+```sh
+# Claude Code（user スコープ。どのプロジェクトでも、そのプロジェクトのフォルダで開く）
+claude mcp add --transport stdio --scope user readit -- \
+  python3 /absolute/path/to/Readit/tools/readit_mcp.py --launch
+```
+
+- 起動するのは最初のツール呼び出しのときです。`web/dist/server.js` を空いているポートで起動し、ブラウザでタブを開き、画面が応答するまで最大20秒待ちます。ツールを使わないセッションでは何も起動しません。
+- 開くフォルダは `--workspace`、指定がなければMCPサーバーの作業ディレクトリです。
+- socketは `--socket` で指定できます。指定がなければ `~/.readit/sessions/<名前>-<pid>-<乱数>.sock` を作ります（ログは同じ名前の `.log`）。`readit_state` の結果に `control_socket` として入るので、`readit_wait.py --socket` にそのまま渡せます。
+- 画面の名前は `--label`、指定がなければMCPクライアントが名乗った名前（`clientInfo.name`）です。タブのタイトルとヘッダーに出るので、どのセッションの画面か見分けられます。
+- タブを閉じた後にツールを呼ぶと、タブを開き直します。
+- セッションが終わると（標準入力が閉じる、SIGTERM、SIGHUP）Readitを止めます。MCPサーバーが強制終了された場合も、Readitは標準入力の切断を検知して止まります（サーバーの `--exit-with-stdin`）。ガイドはメモリ内にあるので、セッションの終了とともに消えます。
+- ブラウザを開くコマンドは `READIT_OPEN`（既定は macOS で `open`、他は `xdg-open`）、Node.js は `READIT_NODE`（既定は `node`）で変えられます。
+
+`--launch` を付けない場合は従来どおり、`--socket` のReaditに接続します。手で起動した1つの画面を複数のセッションで共有すると、質問はすべてのセッションに届き、ツアーは後から登録した側で置き換わります。
+
 ## 操作
 
 | ツール | 用途 |
