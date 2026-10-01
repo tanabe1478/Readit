@@ -35,6 +35,19 @@ Readit owns Next/Back and completes the last step locally. Its `step` events are
 
 For questions, poll `readit_guide_events` while actively available. A `question` event contains the actual question, source, explanation and previous Q&A. Read the relevant source and prepare an answer plus a revised route for the unread portion. Re-read state/events before submitting `readit_guide_revise(workspace, id, event_sequence, question_sequence, answer, steps)`. Here `id` is the tour id, and `steps` replaces everything after `visited_through`, not after the question's location. Visited explanations, current position and the question/answer are retained. An empty steps list ends the route after visited history. Navigation during generation makes the event sequence stale; re-read state and adjust the unread suffix before retrying. Existing steps remain usable while generating. Do not use `readit_guide_load` to handle a question, since it restarts history.
 
+## Receive questions without being told
+
+The user should not have to announce in the chat that they sent a question. While you are available after loading a tour or showing a bubble, keep one waiter running for the window:
+
+- Clients that run a command in the background and resume you when it exits (Claude Code: Bash with `run_in_background`): start `python3 <Readit>/tools/readit_wait.py --stop-when-idle` in the background. `<Readit>` is the repository that provides `tools/readit_mcp.py`; the default socket is `$READIT_SOCKET` or `~/.readit/control.sock`, and `--socket` overrides it to match the MCP server. Never run it in the foreground, which would block the conversation. When it exits it prints one JSON line:
+  - `question`: answer it (`readit_guide_revise` for a tour, `readit_guide_answer` for a single bubble), then start the waiter again with `--after <latest_sequence>`.
+  - `next`: continue a single-bubble walkthrough, then restart it the same way.
+  - `timeout`: restart it with the same `--after`.
+  - `ended` or `truncated`: stop waiting. After `truncated`, read `readit_state` before acting.
+- pi with the Readit package (`integrations/pi`): the package already waits for the whole session and sends each question to you as a user message. Do not start another waiter. `/readit-watch off` stops it.
+
+Tell the user once that questions arrive automatically while this session is open.
+
 On end, interrupted, cleared, truncated events or workspace change, stop and do not resurrect the guide without a user request. Source changes reject stale explanations. Do not promise question answering while no AI is running: prepared navigation is local, but new answers and regeneration require a connected active AI.
 
 ## Overview before implementation details

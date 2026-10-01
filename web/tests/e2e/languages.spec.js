@@ -12,7 +12,13 @@ async function definition(readit, file, line, column) {
   const s = readit.socketPath;
   const root = (await ok(s, 'readit_state')).workspace;
   await ok(s, 'readit_open', { workspace: root, path: file, line, column });
-  return ok(s, 'readit_symbol', { workspace: root, kind: 'definition' });
+  // A server still indexing answers empty, as a user would see; ask again like they would.
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const answer = await ok(s, 'readit_symbol', { workspace: root, kind: 'definition' });
+    if (answer.targets.length > 0 || Date.now() > deadline) return answer;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
 }
 
 test.describe('typescript', () => {

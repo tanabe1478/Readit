@@ -131,6 +131,7 @@ test "roles and reading order" {
     "README.md", "src/types.ts", "src/main.rs", "src/tests/a_test.py", "Cargo.toml",
   ])
   assert_eq(@core.language("x/y.tsx"), "tsx")
+  assert_eq(@core.language("app/main.mbt"), "moonbit")
   assert_eq(@core.language_id("a.java"), Some("java"))
 }
 

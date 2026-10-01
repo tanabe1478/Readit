@@ -73,6 +73,7 @@ pub fn language(path : String) -> String {
     "graphql" => "graphql"
     "proto" => "proto"
     "zig" => "zig"
+    "mbt" | "mbti" => "moonbit"
     _ => "text"
   }
 }

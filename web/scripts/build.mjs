@@ -99,4 +99,8 @@ copy(path.join(cache, 'tree-sitter-markdown.wasm'), path.join(www, 'grammars/mar
 copy(path.join(cache, 'tree-sitter-markdown_inline.wasm'), path.join(www, 'grammars/markdown_inline.wasm'));
 copy(path.join(source, 'tree-sitter-markdown/queries/highlights.scm'), path.join(www, 'grammars/markdown.scm'));
 copy(path.join(source, 'tree-sitter-markdown-inline/queries/highlights.scm'), path.join(www, 'grammars/markdown_inline.scm'));
+// MoonBit is built from a pinned commit by scripts/build-moonbit-grammar.mjs.
+const moonbit = path.join(web, 'third-party/tree-sitter-moonbit');
+copy(path.join(moonbit, 'moonbit.wasm'), path.join(www, 'grammars/moonbit.wasm'));
+copy(path.join(moonbit, 'highlights.scm'), path.join(www, 'grammars/moonbit.scm'));
 console.log(`Readit web: built (${mode})`);

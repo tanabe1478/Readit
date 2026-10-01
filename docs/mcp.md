@@ -77,6 +77,19 @@ Readit内の「次へ・戻る」は用意済みの説明を即座に表示し�
 
 吹き出しは本文に応じた高さになり、収まらない場合だけ全体をスクロールします。ステップ切り替え時は注釈対象をエディター上部へ配置し、その下に説明用の空間を作ります。見出しをドラッグして手動配置もできます。
 
+## 質問をAIへ自動で届ける
+
+吹き出しから質問を送った後に、チャットで「質問を送った」と伝える必要はありません。`tools/readit_wait.py` が質問を待ち、届いたら JSON を1行出力して終了します。Python 3.10 以上の標準ライブラリだけで動作します。
+
+```sh
+python3 /absolute/path/to/Readit/tools/readit_wait.py --stop-when-idle
+```
+
+`status` は `question`（質問）、`next`（単発の吹き出しの「次へ」）、`ended`（ガイドが無くなった。`--stop-when-idle` 指定時）、`truncated`（取りこぼし）、`timeout` のいずれかです。続けて待つときは、出力の `latest_sequence` を `--after` に渡します。socket は `--socket`、`READIT_SOCKET`、`~/.readit/control.sock` の順に決まります。
+
+- Claude Code: readit-guide skill の手順で、エージェントがこのコマンドをバックグラウンドで実行します。終了するとエージェントが再開して回答し、また待機します。
+- pi: `integrations/pi` のパッケージが、セッションの間このコマンドを動かし、質問をユーザーメッセージとして届けます。MCP サーバーと skill も同じパッケージで入ります。詳しくは [integrations/pi/README.md](../integrations/pi/README.md) を参照してください。
+
 ## 単発のコードに紐づく吹き出し
 
 

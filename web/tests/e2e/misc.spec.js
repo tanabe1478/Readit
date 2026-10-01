@@ -101,3 +101,15 @@ test('quit stops the server after confirming unsaved edits', async ({ page, read
   await expect.poll(() => readit.child.exitCode).toBe(0);
   expect(fs.readFileSync(path.join(readit.project, 'docs/guide.md'), 'utf8')).toBe('# Guide\nsearch me\n');
 });
+
+test.describe('MoonBit highlighting', () => {
+  test.use({ files: { 'main.mbt': '///|\npub fn greet(name : String) -> String {\n  "hello \\{name}"\n}\n' } });
+  test('.mbt files are highlighted with the MoonBit grammar', async ({ page }) => {
+    await expect(page.locator('.tab.selected')).toContainText('main.mbt');
+    await expect(page.locator('#status')).toContainText('moonbit');
+    await expect(page.locator('.row[data-line="0"] .t-comment')).toHaveText('///|');
+    await expect(page.locator('.row[data-line="1"] .t-keyword').first()).toHaveText('pub');
+    await expect(page.locator('.row[data-line="1"] .t-function')).toHaveText('greet');
+    await expect(page.locator('.row[data-line="1"] .t-type').first()).toHaveText('String');
+  });
+});

@@ -1,0 +1,15 @@
+{
+  "name": "readit-pi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Readit for pi: the MCP tools, the readit-guide skill, and guide questions delivered into the session",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": ["./skills/readit-guide"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

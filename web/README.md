@@ -46,7 +46,17 @@ python3 ../tools/readit_mcp.py --socket ~/.readit/control.sock
 | `app` | wasm-gc | 画面の状態と描画、キー操作、MCP 操作の処理、読解ガイド |
 | `server` | js | HTTP、ファイル操作、Git、言語サーバー、制御 socket の中継 |
 
-`www/glue.js` は DOM・マウス位置から文字位置への変換・IME・クリップボード・Tree-sitter（web-tree-sitter）を担当する薄い JS です。状態はすべて `app` 側が持ちます。
+`www/glue/` は、wasm からは触れないブラウザの機能をつなぐ薄い JS です。状態は持たず、すべて `app` 側が持ちます。
+
+| ファイル | 役割 |
+| --- | --- |
+| `main.js` | 起動。wasm-gc を JS String Builtins 付きで読み込む |
+| `bridge.js` | wasm の関数の保持と、アプリへのイベント送信 |
+| `dom.js` | 領域の HTML 更新、スクロール、IME 用入力欄の位置合わせ |
+| `hit.js` | 画面上の位置と行・列の相互変換 |
+| `input.js` | キー・マウス・フォーカス・スクロールの配線、制御ストリーム |
+| `server.js` | API 呼び出し、タイマー、クリップボード、正規表現 |
+| `highlight.js` | Tree-sitter（web-tree-sitter）による構文ハイライト |
 
 ## ネイティブ版との違い
 
@@ -82,5 +92,6 @@ E2E テストは一時ディレクトリにプロジェクトを作り、実際�
 - web-tree-sitter 0.25.10（MIT）
 - Tree-sitter 文法（すべて MIT）: python 0.25.0、rust 0.24.0、javascript 0.25.0、typescript 0.23.2、json 0.24.8、go 0.25.0、java 0.23.5、html 0.23.2、css 0.25.0、bash 0.25.1、c 0.24.1、cpp 0.23.4、ruby 0.23.1、toml 0.7.0、yaml 0.7.1
 - tree-sitter-markdown 0.5.3（MIT）。npm に wasm が無いため、ビルド時に GitHub のリリースから取得し、SHA-256 を検証します。
+- tree-sitter-moonbit（Apache-2.0、コミット `5435c30`）。wasm が公開されていないため、ビルドした結果を `third-party/tree-sitter-moonbit/` に置いています。作り直しは `node scripts/build-moonbit-grammar.mjs` です。
 
 テストだけで使うもの: @playwright/test 1.63.0（Apache-2.0）。
