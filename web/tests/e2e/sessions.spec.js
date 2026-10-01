@@ -94,8 +94,11 @@ test('two sessions launch separate windows with their own tours', async ({ page,
     a.child.stdin.end();
     await exited(a.child);
     await expect.poll(() => fs.existsSync(a.socketPath)).toBe(false);
+    // A clean stop leaves no log behind; a killed session keeps it for inspection.
+    expect(fs.existsSync(a.socketPath.replace(/\.sock$/, '.log'))).toBe(false);
     b.child.kill('SIGKILL');
     await expect.poll(() => fs.existsSync(b.socketPath), { timeout: 10000 }).toBe(false);
+    expect(fs.existsSync(b.socketPath.replace(/\.sock$/, '.log'))).toBe(true);
   } finally {
     a.child.kill();
     b.child.kill();

@@ -279,7 +279,7 @@ class Launcher:
         server = os.path.join(self.web, "dist/server.js")
         if not os.path.exists(server):
             raise ValueError(f"Readit web is not built: run npm install and npm run build in {self.web}")
-        log_path = os.path.splitext(self.endpoint)[0] + ".log"
+        log_path = self.log_path = os.path.splitext(self.endpoint)[0] + ".log"
         with open(log_path, "w") as log:
             self.child = subprocess.Popen(
                 [self.node, server, "--web-root", self.web, "--port", "0", "--label", self.label,
@@ -298,8 +298,8 @@ class Launcher:
             time.sleep(0.1)
         with open(log_path) as log:
             detail = log.read().strip()
-        self.close()
-        raise ValueError(f"Readit did not start: {detail or 'no output'}")
+        self.close(keep_log=True)
+        raise ValueError(f"Readit did not start: {detail or 'no output'} (log: {log_path})")
 
     def open_window(self):
         # A closed tab is reopened, but not again while the last one is still loading.
@@ -310,14 +310,23 @@ class Launcher:
         subprocess.Popen([*shlex.split(self.opener), self.url], stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def close(self):
-        if self.child and self.child.poll() is None:
+    def close(self, keep_log=False):
+        """Stop the server. The log stays only when something went wrong."""
+        if self.child is None:
+            return
+        crashed = self.child.poll() not in (None, 0)
+        if not crashed:
             self.child.terminate()
             try:
                 self.child.wait(5)
             except subprocess.TimeoutExpired:
                 self.child.kill()
         self.child = None
+        if not keep_log and not crashed:
+            try:
+                os.unlink(self.log_path)
+            except OSError:
+                pass
 
 
 class Server:
