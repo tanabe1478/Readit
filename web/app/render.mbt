@@ -1,14 +1,21 @@
 // HTML for each region. The glue replaces a region only when its HTML changes.
 
 ///|
+/// A nonempty `disabled` disables the button and explains why.
 fn button(
   act : String,
   label : String,
   arg? : String = "",
   extra? : String = "",
+  disabled? : String = "",
 ) -> String {
   let data = if arg == "" { "" } else { " data-arg=\"\{e(arg)}\"" }
-  "<button class=\"btn\{extra}\" data-act=\"\{act}\"\{data}>\{e(label)}</button>"
+  let off = if disabled == "" {
+    ""
+  } else {
+    " disabled title=\"\{e(disabled)}\""
+  }
+  "<button class=\"btn\{extra}\" data-act=\"\{act}\"\{data}\{off}>\{e(label)}</button>"
 }
 
 ///|
@@ -423,6 +430,52 @@ fn render_overview() -> String {
     out.write_string(
       "<div class=\"stale\">コードに変更があります。外部AIに概観とガイドの更新を依頼してください。</div>",
     )
+  }
+  if overview.claims is Some(claims) && claims.length() > 0 {
+    out.write_string("<b>今回の重要なポイント</b>")
+    let mut k = 0
+    for claim in claims {
+      let (badge, label) = if claim.confidence == "source_confirmed" {
+        ("confirmed", "コード上で確認")
+      } else {
+        ("inferred", "推論")
+      }
+      out.write_string(
+        "<div class=\"card claim\"><span class=\"badge \{badge}\">\{label}</span><div>\{e(claim.statement)}</div>\{caption("根拠")}",
+      )
+      for ev in claim.evidence {
+        let line = @core.position_at(ev.source, ev.start).line + 1
+        let changed = if evidence_stale(ev) { " · 変更あり" } else { "" }
+        out.write_string(
+          "<button class=\"evidence\" data-act=\"evidence\" data-arg=\"\{k}\">→ \{e(ev.path)}:\{line}  \{e(ev.label)}\{changed}</button>",
+        )
+        k += 1
+      }
+      out.write_string("</div>")
+    }
+  }
+  if overview.reader_context is Some(context) &&
+    (context.known.length() > 0 || context.focus.length() > 0) {
+    let open = reader.context_open
+    out.write_string(
+      "<div class=\"card context\"><button class=\"context-toggle\" data-act=\"toggle-context\">\{if open { "▾" } else { "▸" }} 今回の前提</button>",
+    )
+    if open {
+      out.write_string(
+        caption("この解説が前提にしたことと、今回の焦点です。違っていればAIに伝えてください。"),
+      )
+      for section in [("知っている前提", context.known), ("今回見るもの", context.focus)] {
+        let (title, items) = section
+        if items.length() > 0 {
+          out.write_string("<b>\{title}</b><ul>")
+          for item in items {
+            out.write_string("<li>\{e(item)}</li>")
+          }
+          out.write_string("</ul>")
+        }
+      }
+    }
+    out.write_string("</div>")
   }
   out.write_string("<div class=\"card\"><b>構成と処理の流れ</b>")
   for line in @core.split_newlines(overview.relationships) {

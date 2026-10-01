@@ -33,6 +33,7 @@ function focusTarget(el) {
     case 'dialog-replacement': return 'dialog-replacement';
     case 'search-input': return 'search-input';
     case 'guide-question': return 'guide-question';
+    case 'guide-prediction': return 'guide-prediction';
   }
   if (el.closest && el.closest('#sidebar')) return 'explorer';
   if (el.closest && el.closest('#overlay')) return 'dialog';
@@ -40,7 +41,7 @@ function focusTarget(el) {
 }
 
 const focusNames = { editor: 'editor', 'dialog-query': 'query', 'dialog-replacement': 'query', 'search-input': 'search',
-  'guide-question': 'guide-question', explorer: 'explorer', dialog: 'dialog', body: 'body' };
+  'guide-question': 'guide-question', 'guide-prediction': 'guide-prediction', explorer: 'explorer', dialog: 'dialog', body: 'body' };
 
 let lastPointer = { x: 0, y: 0, over: null };
 let composing = false;

@@ -113,6 +113,7 @@ fn control_state() -> Json {
         {
           "id": g.id,
           "title": g.title,
+          "kind": g.kind,
           "question_open": g.question_open,
           "question": opt_string(g.question),
           "pending_question": opt_int(g.pending_question),
@@ -136,7 +137,16 @@ fn control_state() -> Json {
           },
           "seen_steps": Json::array(sorted(t.seen).map(Json::string)),
           "steps": Json::array(
-            t.steps.map(g => { "id": g.id, "title": g.title }),
+            t.steps.map(g => { "id": g.id, "title": g.title, "kind": g.kind }),
+          ),
+          "predictions": Json::array(
+            t.steps
+            .filter_map(g => tour_prediction(t, g.id))
+            .map(p => {
+              "step_id": p.step_id,
+              "status": p.status,
+              "answer": opt_string(p.answer),
+            }),
           ),
         }
       None => Json::null()
@@ -276,6 +286,7 @@ fn control_sync(
         _ => fail("id required")
       }
       let steps = prepare_steps(args, false)
+      check_step_links(steps)
       let overview = match json_field(args, "overview") {
         Some(v) => Some(parse_overview(v, steps))
         None => None
@@ -292,6 +303,7 @@ fn control_sync(
               visited: 0,
               overview,
               seen: [],
+              predictions: [],
             })
             reader.overview_visible = show
             reader.overview_tab = show
@@ -363,6 +375,7 @@ fn control_sync(
       for s in steps {
         kept.push(s)
       }
+      check_step_links(kept)
       let overview = match json_field(args, "overview") {
         Some(value) => Some(parse_overview(value, kept))
         None =>
@@ -380,6 +393,14 @@ fn control_sync(
       for id in seen {
         tour.seen.push(id)
       }
+      // Predictions belong to displayed steps, which the revision keeps.
+      let predictions = tour.predictions.filter(p => {
+        kept.iter().any(g => g.id == p.step_id)
+      })
+      tour.predictions.clear()
+      for p in predictions {
+        tour.predictions.push(p)
+      }
       tour.steps = kept
       tour.overview = overview
       Ok(control_state())
@@ -395,7 +416,7 @@ fn control_sync(
       if dialog_open() {
         fail("finish the editor dialog first")
       }
-      let guide = prepare_guide(args)
+      let guide = prepare_guide(args, in_tour=false)
       activate_guide(guide, result => {
         match result {
           Err(e) => reply(Err(e))

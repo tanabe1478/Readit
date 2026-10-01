@@ -138,6 +138,13 @@ fn on_key(desc : String, target : String) -> Bool {
     return true
   }
   match target {
+    "guide-prediction" =>
+      if desc == "enter" {
+        record_prediction(false)
+        true
+      } else {
+        false
+      }
     "guide-question" =>
       match desc {
         "enter" => {

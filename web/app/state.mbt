@@ -175,6 +175,13 @@ priv struct Guide {
   end : Int
   title : String
   body : String
+  /// explanation, hypothesis, prediction or verification.
+  kind : String
+  /// The question a prediction step asks the reader.
+  prompt : String?
+  /// The earlier prediction step a verification step answers.
+  verifies : String?
+  mut prediction_error : String?
   mut question_open : Bool
   mut pending_question : Int?
   mut question : String?
@@ -199,16 +206,44 @@ priv struct Chapter {
 }
 
 ///|
+/// Source text backing a claim, checked like a step's expected_text.
+priv struct Evidence {
+  label : String
+  path : String
+  source : String
+  start : Int
+  end : Int
+}
+
+///|
+priv struct Claim {
+  id : String
+  statement : String
+  /// source_confirmed or inferred.
+  confidence : String
+  evidence : Array[Evidence]
+}
+
+///|
+/// What the explanation assumes the reader knows. Kept in memory only.
+priv struct ReaderContext {
+  known : Array[String]
+  focus : Array[String]
+}
+
+///|
 priv struct Overview {
   title : String
   summary : String
   relationships : String
   chapters : Array[Chapter]
+  reader_context : ReaderContext?
+  claims : Array[Claim]?
 }
 
 ///|
 fn Overview::to_json(self : Overview) -> Json {
-  {
+  let out : Map[String, Json] = {
     "title": self.title,
     "summary": self.summary,
     "relationships": self.relationships,
@@ -220,6 +255,43 @@ fn Overview::to_json(self : Overview) -> Json {
       }),
     ),
   }
+  if self.reader_context is Some(c) {
+    out["reader_context"] = {
+      "known": Json::array(c.known.map(Json::string)),
+      "focus": Json::array(c.focus.map(Json::string)),
+    }
+  }
+  if self.claims is Some(claims) {
+    out["claims"] = Json::array(
+      claims.map(c => {
+        "id": c.id,
+        "statement": c.statement,
+        "confidence": c.confidence,
+        "evidence": Json::array(
+          c.evidence.map(ev => {
+            let at = @core.position_at(ev.source, ev.start)
+            {
+              "label": ev.label,
+              "path": ev.path,
+              "line": Json::number((at.line + 1).to_double()),
+              "column": Json::number((at.character + 1).to_double()),
+              "expected_text": @core.slice(ev.source, ev.start, ev.end),
+            }
+          }),
+        ),
+      }),
+    )
+  }
+  Json::object(out)
+}
+
+///|
+/// The reader's own prediction, recorded before reading on. Never graded.
+priv struct Prediction {
+  step_id : String
+  /// answered or unknown.
+  status : String
+  answer : String?
 }
 
 ///|
@@ -230,6 +302,7 @@ priv struct Tour {
   mut visited : Int
   mut overview : Overview?
   seen : Array[String]
+  predictions : Array[Prediction]
 }
 
 ///|
@@ -380,6 +453,8 @@ priv struct Reader {
   mut loading : String?
   mut guide_height : Double
   mut guide_height_key : String
+  /// The overview's reader context section is expanded.
+  mut context_open : Bool
 }
 
 ///|
@@ -471,4 +546,5 @@ let reader : Reader = {
   loading: None,
   guide_height: 0.0,
   guide_height_key: "",
+  context_open: false,
 }

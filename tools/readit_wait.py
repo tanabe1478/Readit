@@ -12,6 +12,7 @@ Output (stdout, one line): {"status": ..., "latest_sequence": n, ...}
   ended     no guide or tour remains (only with --stop-when-idle)
   truncated events older than --after were dropped; read readit_state
   timeout   --timeout elapsed; run again with the same --after
+Prediction events are the reader's local notes and never end the wait.
 Diagnostics go to stderr. Python 3.10+ standard library only.
 """
 import argparse

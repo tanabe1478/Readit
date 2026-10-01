@@ -81,6 +81,18 @@ class WaitTests(unittest.TestCase):
         afters = [c["arguments"]["after"] for c in editor.calls if c["method"] == "readit_guide_events"]
         self.assertEqual(afters[0], 2)
 
+    def test_predictions_are_local_and_do_not_wake_the_ai(self):
+        prediction = {"sequence": 3, "action": "prediction", "id": "guess", "status": "answered", "answer": "消える"}
+        question = {"sequence": 4, "action": "question", "question": "なぜ？", "id": "one"}
+        editor = FakeEditor([
+            {"state": tour_state(3), "events": [prediction], "latest": 3},
+            {"state": tour_state(4), "events": [prediction, question], "latest": 4},
+        ])
+        result = self.run_wait(editor, after=2, stop_when_idle=True)
+        editor.close()
+        self.assertEqual(result["status"], "question")
+        self.assertEqual(result["event"]["sequence"], 4)
+
     def test_next_on_a_single_guide_is_actionable(self):
         editor = FakeEditor([{"state": tour_state(5), "events": [{"sequence": 6, "action": "next", "id": "one"}], "latest": 6}])
         result = self.run_wait(editor, after=5)

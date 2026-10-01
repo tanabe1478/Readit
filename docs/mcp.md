@@ -6,7 +6,8 @@ Readitは人間とAIが同じコードを見るためのエディターです。
 
 ```sh
 # 親ディレクトリがなければ、Readitが権限700で作成します。
-./artifacts/Readit.app/Contents/MacOS/Readit --demo \
+cd /absolute/path/to/Readit/web
+npm start -- /absolute/path/to/repository \
   --control-socket /tmp/readit-guide/control.sock
 
 # このプロセスをMCPクライアントから起動します。
@@ -29,8 +30,10 @@ MCPクライアントのstdio設定例（絶対パスは環境に合わせて変
 
 MCPクライアントごとの設定形式に合わせてこのcommandとargsを登録します。ReaditはAIプロバイダーに依存しません。Python 3.10以上の標準ライブラリだけで動作します。
 
-`--control-socket`を指定しない起動では、外部操作の待受を作りません。指定時は同じユーザーがアクセスできるプライベートなUnix socketを作ります。ネットワーク用HTTPポートは開きません。
-別ウィンドウには別のsocketを指定します。既存のsocketは上書きしません。クラッシュで残った場合は、そのReaditプロセスが終了していることを確認してからsocketファイルを削除してください。通常終了時には自動で削除します。
+`--control-socket`を指定しない起動では、外部操作の待受を作りません。指定時は同じユーザーがアクセスできるプライベートなUnix socketを作ります。
+Web版の画面用のHTTPは `127.0.0.1` だけで待ち受け、起動ごとのトークンとHostヘッダーの確認で、他のサイトのページからの操作を拒否します。要求はブラウザで開いている画面が処理し、画面を開いていない間は「Readit is not open in a browser」を返します。
+旧版（ネイティブ版）は `./artifacts/Readit.app/Contents/MacOS/Readit --control-socket ...` で同じように接続できます。
+別のReaditには別のsocketを指定します。既存のsocketは上書きしません。クラッシュで残った場合は、そのReaditプロセスが終了していることを確認してからsocketファイルを削除してください。通常終了時には自動で削除します。
 
 ## 操作
 
@@ -153,3 +156,43 @@ python3 /absolute/path/to/Readit/tools/readit_wait.py --stop-when-idle
 `readit_state` は `overview_visible` と `guide_tour.overview`、`seen_steps` を返す。表示済み数は理解度の判定ではない。`readit_view` の `overview: true` で再表示できる。章へ飛ぶと `visited_through` はそこまで進むため、質問後の再生成では未表示の中間ステップも含めて既存の前半を保持する。章付きガイドの `readit_guide_revise` には、保持する前半と更新する後半に対応した完全な `overview` も必須。検証失敗時はガイド・回答・概観を全て維持する。
 
 概観は寄り道や終了後も同じウィンドウ内に残り、コードが変わった場合は更新を促す。ガイドを明示的にclearするか、プロジェクトを切り替えると破棄する。現時点ではメモリ内の保持であり、アプリ再起動を跨ぐ永続化や図の自動解析は行わない。
+
+## 根拠・前提・予測で読む
+
+概観とステップには、任意のフィールドを追加できます。省略すれば従来どおり動きます。
+
+概観（`overview`）:
+
+- `claims`: 重要な主張。最大8件。各要素は `id`（概観内で一意）、`statement`（最大1,000文字）、`confidence`（`source_confirmed` または `inferred`）、`evidence`（1〜8件）。
+- `evidence` の各要素は `label`（最大100文字）、`path`、`line`、`column`、`expected_text`。座標と一致の規則はステップと同じで、プロジェクト内のファイルに限ります。
+- `reader_context`: `known`（説明を省いた前提、最大16件）と `focus`（今回の焦点、最大8件）。各要素は最大200文字。メモリ内だけで保持し、ファイルには書きません。
+
+```json
+"claims": [{
+  "id": "session-owner",
+  "statement": "Sessionが会話状態の主要な所有者になっている",
+  "confidence": "source_confirmed",
+  "evidence": [{"label": "Sessionのstate保持", "path": "src/session.rs", "line": 42, "column": 1, "expected_text": "..."}]
+}],
+"reader_context": {"known": ["async/await"], "focus": ["Sessionの所有権"]}
+```
+
+概観では主張を「コード上で確認」「推論」の印付きで表示し、前提は折りたたんだ「今回の前提」に出します。根拠をクリックすると、概観タブを残したままそのコードを選択します。ツアーの `index`、`visited_through`、`seen_steps` は変わりません。根拠のファイルが登録時から変わっていれば（ステップと同じ判定）、移動せず「ソースが変更されています。このガイドを更新してください。」と表示します。根拠は `readit_guide_load` と `readit_guide_revise` のたびに全件検証し、1件でも不一致なら何も置き換えません。
+
+ステップの `kind`（省略時は `explanation`）:
+
+| kind | 必須の追加フィールド | 表示 |
+| --- | --- | --- |
+| `explanation` | なし | 従来どおり |
+| `hypothesis` | なし | 「仮説」の印。本文の真偽はReaditは判定しない |
+| `prediction` | `prompt`（最大2,000文字） | 問いと入力欄。「予測を記録」または「わからない」を選ぶまで「次へ」は押せない |
+| `verification` | `verifies`（それより前の `prediction` ステップのID） | 記録した予測（または「わからない」）を本文の前に表示 |
+
+`prompt` は `prediction` 以外に、`verifies` は `verification` 以外に付けられません。予測のステップでも「戻る」、概観、章への移動、ファイルの移動は制限しません。章から先へ飛んだ場合、検証のステップには「予測は記録されていません。」と表示します。正誤の判定や採点はしません。`kind` は `readit_guide_load` / `readit_guide_revise` のステップ専用で、`readit_guide_show` では拒否します。
+
+予測は `readit_state.guide_tour.predictions` に、ステップ順の配列で入ります（予測が無ければ空配列）。各要素は `step_id`、`status`（`answered` / `unknown`）、`answer`（`unknown` では `null`）です。`guide_tour.steps` と `guide` にも `kind` が入ります。記録すると `readit_guide_events` に `action: "prediction"` のイベント（`id`、`tour_id`、`status`、`answer`）が追加され、連番が進みます。`readit_wait.py` はこのイベントでは終了しません。予測はAIに答え合わせを求めるものではないためです。
+
+`readit_guide_revise` は既読部分の予測を保持します。予測は表示中のステップでしか記録できないので、置き換わる未読部分に予測はありません。ガイドのclear、プロジェクトの切替、アプリの再起動で予測は消えます。
+
+旧版（ネイティブ版）はこの拡張に対応していません。`claims` や `reader_context` を含む概観は登録時にエラーになり、ステップの `kind`・`prompt`・`verifies` は無視されて通常の説明として表示されます。
+

@@ -156,6 +156,12 @@ textarea.input { resize: vertical; }
 .chapter-head { display: flex; justify-content: space-between; gap: 12px; }
 .chapter .btn { align-self: flex-start; }
 .file-label { font-size: 11px; color: var(--muted); }
+.badge { align-self: flex-start; font-size: 11px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--border); }
+.badge.confirmed { color: #8fd18f; border-color: #8fd18f; }
+.badge.inferred { color: #e0b46c; border-color: #e0b46c; }
+.evidence, .context-toggle { align-self: flex-start; background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; white-space: pre-wrap; }
+.evidence:hover, .context-toggle:hover { text-decoration: underline; }
+.context ul { margin: 0; padding-left: 20px; white-space: normal; }
 
 /* navigation panel and status */
 #navpanel { height: 194px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--panel); border-top: 1px solid var(--border); }
@@ -203,6 +209,13 @@ textarea.input { resize: vertical; }
 .guide-handle { cursor: move; flex-shrink: 0; user-select: none; }
 .guide-body, .guide-answer { white-space: pre-wrap; flex-shrink: 0; }
 .guide-question-text { color: var(--accent); white-space: pre-wrap; }
+#guide-predict { display: flex; flex-direction: column; gap: 8px; }
+#guide-predict:empty { display: none; }
+.guide-kind { align-self: flex-start; font-size: 11px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--accent); color: var(--accent); }
+.guide-prompt { white-space: pre-wrap; font-weight: 600; }
+.guide-prior { padding: 8px; border-left: 3px solid var(--accent); background: var(--bg); display: flex; flex-direction: column; gap: 4px; }
+.guide-prior-text { white-space: pre-wrap; }
+.btn:disabled, .btn:disabled:hover { opacity: .45; cursor: default; background: transparent; }
 #fatal { display: none; position: fixed; left: 16px; right: 16px; bottom: 40px; z-index: 100; padding: 12px; background: #4a1f28; border: 1px solid #eba9b4; border-radius: 8px; white-space: pre-wrap; font: 12px var(--mono); }
 .closed { padding: 40px; font-size: 16px; }
 .snippet-line { white-space: pre; min-height: 1.5em; }

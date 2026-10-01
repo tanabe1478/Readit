@@ -75,6 +75,8 @@ fn guide_anchor(guide : Guide) -> Rect? {
 priv struct GuideView {
   style : String
   main : String
+  /// The prediction input; kept apart so redraws keep what the reader typed.
+  predict : String
   form : String
   after : String
   key : String
@@ -100,7 +102,24 @@ fn render_guide() -> GuideView? {
   })
   let vw = js_viewport_width()
   let vh = js_viewport_height()
-  let key = "\{guide.id}|\{guide.title}|\{guide.body}|\{guide.question.unwrap_or("")}|\{guide.answer.unwrap_or("")}|\{guide.question_open}|\{guide.question_error.unwrap_or("")}|\{guide.pending_question is Some(_)}|\{guide.pending_next is Some(_)}|\{vw}"
+  let recorded = match (reader.tour, guide.kind) {
+    (Some(t), "prediction") => tour_prediction(t, guide.id)
+    (Some(t), "verification") =>
+      match guide.verifies {
+        Some(v) => tour_prediction(t, v)
+        None => None
+      }
+    _ => None
+  }
+  let pending = match reader.tour {
+    Some(t) => prediction_pending(t, guide)
+    None => false
+  }
+  let recorded_key = match recorded {
+    Some(r) => "\{r.status}:\{r.answer.unwrap_or("")}"
+    None => ""
+  }
+  let key = "\{guide.id}|\{guide.kind}|\{recorded_key}|\{guide.prediction_error.unwrap_or("")}|\{guide.title}|\{guide.body}|\{guide.question.unwrap_or("")}|\{guide.answer.unwrap_or("")}|\{guide.question_open}|\{guide.question_error.unwrap_or("")}|\{guide.pending_question is Some(_)}|\{guide.pending_next is Some(_)}|\{vw}"
   let preferred = if reader.guide_height_key == key && reader.guide_height > 0.0 {
     reader.guide_height
   } else {
@@ -128,7 +147,40 @@ fn render_guide() -> GuideView? {
   out.write_string(
     "<div class=\"guide-handle\" data-drag=\"guide\">\{caption("\{progress}\{guide.title} · ドラッグで移動")}</div>",
   )
+  let kind_label = match guide.kind {
+    "hypothesis" => "仮説"
+    "prediction" => "予測"
+    "verification" => "検証"
+    _ => ""
+  }
+  if kind_label != "" {
+    out.write_string(
+      "<span class=\"guide-kind kind-\{guide.kind}\">\{kind_label}</span>",
+    )
+  }
+  // The reader's own words, shown as written. Readit never grades them.
+  let prior = (title : String) => {
+    let text = match recorded {
+      Some({ answer: Some(a), .. }) => "「\{a}」"
+      Some(_) => "わからない"
+      None => "予測は記録されていません。"
+    }
+    "<div class=\"guide-prior\">\{caption(title)}<div class=\"guide-prior-text\">\{e(text)}</div></div>"
+  }
+  if guide.kind == "verification" {
+    out.write_string(prior("あなたの予測"))
+    out.write_string(caption("実際のコード"))
+  }
   out.write_string("<div class=\"guide-body\">\{e(guide.body)}</div>")
+  if guide.prompt is Some(prompt) {
+    out.write_string("<div class=\"guide-prompt\">\{e(prompt)}</div>")
+    if recorded is Some(_) {
+      out.write_string(prior("あなたの予測"))
+    }
+  }
+  if guide.prediction_error is Some(err) && pending {
+    out.write_string(caption(err))
+  }
   if !guide.question_open && guide.question_error is Some(err) {
     out.write_string(caption(err))
   }
@@ -165,6 +217,11 @@ fn render_guide() -> GuideView? {
   if guide.answer is Some(a) {
     out.write_string("<div class=\"guide-answer\">\{e(a)}</div>")
   }
+  let predict = match reader.tour {
+    Some(t) if pending =>
+      "<textarea id=\"guide-prediction\" class=\"input\" rows=\"3\" data-step=\"\{e(t.id)}/\{e(guide.id)}\" placeholder=\"自分の予測を書く（Enterで記録、⇧Enterで改行）\"></textarea><div class=\"row-buttons\">\{button("prediction-record", "予測を記録")}\{button("prediction-unknown", "わからない")}</div>"
+    _ => ""
+  }
   let form = if guide.question_open {
     "<textarea id=\"guide-question\" class=\"input\" rows=\"2\" placeholder=\"どの点が気になりますか？\"></textarea>"
   } else {
@@ -191,7 +248,17 @@ fn render_guide() -> GuideView? {
     Some(t) if t.index + 1 == t.steps.length() => "完了"
     _ => if guide.pending_next is Some(_) { "待機中…" } else { "次へ" }
   }
-  row.write_string(button("guide-next", next_label))
+  row.write_string(
+    button(
+      "guide-next",
+      next_label,
+      disabled=if pending {
+        "予測を記録するか「わからない」を選ぶと進めます"
+      } else {
+        ""
+      },
+    ),
+  )
   row.write_string(
     button(
       "guide-ask",
@@ -207,6 +274,7 @@ fn render_guide() -> GuideView? {
   Some({
     style: "left:\{px(left)};top:\{px(top)};width:\{px(width)};max-height:\{px(max_height)}",
     main: out.to_string(),
+    predict,
     form,
     after: after_form.to_string() + row.to_string(),
     key,

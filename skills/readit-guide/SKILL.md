@@ -58,6 +58,20 @@ The user can open any chapter, return to the overview, close/reopen its tab, or 
 
 When revising a chaptered tour, include a complete updated `overview` in `readit_guide_revise`, referencing the retained steps plus the replacement suffix. Validation is atomic. A jump to a later chapter advances `visited_through`; preserve the whole prefix even if some intervening steps were not displayed.
 
+## Evidence, hypotheses and predictions
+
+The goal is the reader's own mental model of the code, not a longer AI explanation. For a codebase or a substantial change, build the route as: investigate → overview → evidence for key claims → hypotheses → predictions at important points → verification in later code or tests. All of this is optional schema; omit what does not help.
+
+Evidence. Put the overview's key claims in `overview.claims` (max 8): `id`, `statement` (1000), `confidence`, and 1–8 `evidence` anchors (`label` (100), `path`, `line`, `column`, `expected_text`, validated like steps; workspace files only). Use `source_confirmed` only when you read that source with `readit_read` and the anchored text itself shows the claim. Use `inferred` for design or author intent, future extensibility, architecture judgments, conclusions drawn from several places, and runtime behavior you did not run. A test that exists is not a test that passed; Readit never runs tests. Opening evidence is a detour that keeps tour progress; stale evidence refuses to open.
+
+Reader context. Put what the explanation assumes in `overview.reader_context.known` (max 16) and what the reader wants to understand in `focus` (max 8), each item max 200 characters, only when the conversation makes it clear. Do not invent a profile, and do not stop to interview the user for one; omit the field when it would not change the explanation. It is shown so the reader can correct your assumptions, and it is not stored.
+
+Hypotheses. When it is worth having the reader look before you conclude, use a step with `kind: "hypothesis"`: say what the code appears to do and what you will check ("Repository looks like the persistence boundary; first the interface and its callers"), not a bare verdict ("This is the repository pattern"). Confirm or revise it in later steps.
+
+Predictions. A step with `kind: "prediction"` and a `prompt` (2000) asks the reader to commit to an expectation before reading on; Next stays disabled until they record one or choose "unknown". Use them sparingly, at ownership, lifetime, state transitions, error propagation, boundary conditions, caller/callee responsibility, fallbacks, concurrency, data flow, dependency direction or API contracts, e.g. "If this returns Err, who recovers?". Never for plain syntax. Follow with `kind: "verification"` and `verifies: <earlier prediction id>`; Readit shows the reader's prediction above your body, so write the body as what the code actually does and where to see it. Do not grade predictions or call them right or wrong, in the bubble or in chat.
+
+Predictions are local: recording one emits a `prediction` event and fills `readit_state.guide_tour.predictions`, but it is not a request to you, and the waiter does not wake for it. Read them later only when useful, for example to address a misunderstanding the reader asks about. Questions remain the reader-to-AI channel. When revising, recorded predictions in the visited prefix are kept, and new verification steps may verify them.
+
 ## Single explanations
 
 For one isolated explanation, use `readit_guide_show` with the same source fields plus the current `event_sequence`. Its legacy Next event waits for external continuation; prefer a prepared tour for sequential reading. Answer a single explanation's question with `readit_guide_answer(workspace, id, question_sequence, body)` without replacing the bubble. Never invent user questions or runtime observations. `readit_guide_clear` closes a guide; do not clear a prepared tour merely because your response ends.

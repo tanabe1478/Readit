@@ -36,17 +36,49 @@ def tool(name, description, properties, required=(), changes_view=False, idempot
     }
 
 
+KINDS = ["explanation", "hypothesis", "prediction", "verification"]
+
 STEP = {"type": "object", "properties": {
     "id": string("Unique step id."), "title": string("Step heading."),
     "body": string("Complete explanation, max 2000 characters."), "path": PATH,
-    "line": LINE, "column": COLUMN, "expected_text": string("Exact current source to highlight.")},
+    "line": LINE, "column": COLUMN, "expected_text": string("Exact current source to highlight."),
+    "kind": {"type": "string", "enum": KINDS, "description":
+             "Optional, default explanation. hypothesis: a claim the reader checks in later code. "
+             "prediction: the reader records what they expect before reading on; requires prompt. "
+             "verification: shows the reader's earlier prediction next to this code; requires verifies."},
+    "prompt": string("prediction only: the question the reader answers, max 2000 characters."),
+    "verifies": string("verification only: id of an earlier prediction step in the same tour.")},
     "required": ["id", "title", "body", "path", "line", "column", "expected_text"], "additionalProperties": False}
 STEPS = {"type": "array", "items": STEP, "maxItems": 32}
+
+EVIDENCE = {"type": "object", "properties": {
+    "label": string("What this code shows, max 100 characters."),
+    "path": string("Workspace-relative file path."), "line": LINE, "column": COLUMN,
+    "expected_text": string("Exact current source, max 16000 characters. Rejects stale code.")},
+    "required": ["label", "path", "line", "column", "expected_text"], "additionalProperties": False}
+
+CLAIM = {"type": "object", "properties": {
+    "id": string("Claim id, unique within the overview."),
+    "statement": string("The claim, max 1000 characters. Plain text."),
+    "confidence": {"type": "string", "enum": ["source_confirmed", "inferred"], "description":
+                   "source_confirmed only when the evidence text itself shows the claim. "
+                   "Design intent, runtime behavior and conclusions drawn from several places are inferred."},
+    "evidence": {"type": "array", "items": EVIDENCE, "minItems": 1, "maxItems": 8}},
+    "required": ["id", "statement", "confidence", "evidence"], "additionalProperties": False}
+
+READER_CONTEXT = {"type": "object", "properties": {
+    "known": {"type": "array", "items": string("A concept the explanation assumes, max 200 characters."), "maxItems": 16},
+    "focus": {"type": "array", "items": string("A concept this tour concentrates on, max 200 characters."), "maxItems": 8}},
+    "required": [], "additionalProperties": False}
 
 OVERVIEW = {"type": "object", "properties": {
     "title": string("Overview title, max 100 characters."),
     "summary": string("Purpose and scope, max 2000 characters. Plain text."),
     "relationships": string("Roles, boundaries, and main flow, max 4000 characters. Plain text with newlines."),
+    "reader_context": {**READER_CONTEXT, "description":
+                       "Optional. What the explanation assumes the reader knows, and what they want to focus on. Only include what the conversation makes clear. Not stored."},
+    "claims": {"type": "array", "items": CLAIM, "maxItems": 8, "description":
+               "Optional key claims, each backed by source evidence the reader can open."},
     "chapters": {"type": "array", "minItems": 1, "maxItems": 16, "items": {
         "type": "object", "properties": {
             "title": string("Chapter title, max 100 characters."),
@@ -56,7 +88,7 @@ OVERVIEW = {"type": "object", "properties": {
     "required": ["title", "summary", "relationships", "chapters"], "additionalProperties": False}
 
 TOOLS = [
-    tool("readit_guide_load", "Load an entire prepared tour atomically. Next/back run locally without AI. Provide overview to open a native overview tab before code. Read all source first. Step events are informational, not requests to generate another explanation.",
+    tool("readit_guide_load", "Load an entire prepared tour atomically. Next/back run locally without AI. Provide overview to open a native overview tab before code. Read all source first. Step events are informational, not requests to generate another explanation. A prediction step keeps Next disabled until the reader records a prediction or chooses unknown; that happens locally and emits a prediction event, not a request for an answer.",
          {"workspace": WORKSPACE, "id": string("Tour id."), "event_sequence": integer("Latest guide event sequence.", minimum=0), "steps": {**STEPS, "minItems": 1}, "overview": OVERVIEW},
          ("workspace", "id", "event_sequence", "steps"), True),
     tool("readit_guide_revise", "Answer a pending tour question and atomically replace all unread steps after visited_through. Preserve visited history and current position. Read state/events first; reject stale navigation or ended tours. Existing steps remain usable while generating. An empty steps array ends the route after visited history.",
@@ -104,23 +136,49 @@ def validate(arguments, schema):
     if set(schema["required"]) - set(arguments):
         raise RpcError(-32602, "missing required tool argument")
     for key, value in arguments.items():
-        rule = schema["properties"][key]
-        expected = {"string": str, "integer": int, "boolean": bool, "array": list, "object": dict}[rule["type"]]
-        if type(value) is not expected:
-            raise RpcError(-32602, f"{key} must be {rule['type']}")
-        if rule["type"] == "object":
-            validate(value, rule)
-        if rule["type"] == "array":
-            if len(value) < rule.get("minItems", 0) or len(value) > rule.get("maxItems", 32):
-                raise RpcError(-32602, f"invalid {key} length")
-            for item in value:
-                validate(item, rule["items"])
-        if "enum" in rule and value not in rule["enum"]:
-            raise RpcError(-32602, f"invalid {key}")
-        if "minimum" in rule and value < rule["minimum"]:
-            raise RpcError(-32602, f"{key} is too small")
-        if "maximum" in rule and value > rule["maximum"]:
-            raise RpcError(-32602, f"{key} is too large")
+        check(key, value, schema["properties"][key])
+
+
+def check(key, value, rule):
+    expected = {"string": str, "integer": int, "boolean": bool, "array": list, "object": dict}[rule["type"]]
+    if type(value) is not expected:
+        raise RpcError(-32602, f"{key} must be {rule['type']}")
+    if rule["type"] == "object":
+        validate(value, rule)
+    if rule["type"] == "array":
+        if len(value) < rule.get("minItems", 0) or len(value) > rule.get("maxItems", 32):
+            raise RpcError(-32602, f"invalid {key} length")
+        for item in value:
+            check(key, item, rule["items"])
+    if "enum" in rule and value not in rule["enum"]:
+        raise RpcError(-32602, f"invalid {key}")
+    if "minimum" in rule and value < rule["minimum"]:
+        raise RpcError(-32602, f"{key} is too small")
+    if "maximum" in rule and value > rule["maximum"]:
+        raise RpcError(-32602, f"{key} is too large")
+
+
+def validate_tour(arguments, revising):
+    """Rules a JSON schema cannot express. Readit checks them again against the whole tour."""
+    steps = arguments.get("steps", [])
+    given = {step["id"] for step in steps}
+    seen = {}
+    for step in steps:
+        kind = step.get("kind", "explanation")
+        if step["id"] in seen:
+            raise RpcError(-32602, "step ids must be unique")
+        if (kind == "prediction") != ("prompt" in step):
+            raise RpcError(-32602, "prompt is required for prediction steps and allowed only there")
+        if (kind == "verification") != ("verifies" in step):
+            raise RpcError(-32602, "verifies is required for verification steps and allowed only there")
+        # A revision may verify a prediction kept from the visited history.
+        if kind == "verification" and (step["verifies"] in given or not revising):
+            if seen.get(step["verifies"]) != "prediction":
+                raise RpcError(-32602, "verifies must name an earlier prediction step")
+        seen[step["id"]] = kind
+    claims = arguments.get("overview", {}).get("claims", [])
+    if len({claim["id"] for claim in claims}) != len(claims):
+        raise RpcError(-32602, "claim ids must be unique")
 
 
 def editor_call(endpoint, name, arguments):
@@ -182,6 +240,8 @@ class Server:
                 raise RpcError(-32602, "unknown tool")
             arguments = params.get("arguments", {})
             validate(arguments, spec["inputSchema"])
+            if spec["name"] in ("readit_guide_load", "readit_guide_revise"):
+                validate_tour(arguments, spec["name"] == "readit_guide_revise")
             try:
                 result = editor_call(self.endpoint, spec["name"], arguments)
             except (OSError, ValueError, KeyError) as error:

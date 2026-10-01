@@ -50,6 +50,82 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(mcp.RpcError):
                 mcp.validate({**args, "steps": steps}, schema)
 
+    def tour_args(self, steps, overview=None):
+        args = {"workspace": "/test", "id": "tour", "event_sequence": 0, "steps": steps}
+        if overview is not None:
+            args["overview"] = overview
+        return args
+
+    def accepts(self, name, args):
+        mcp.validate(args, next(t for t in mcp.TOOLS if t["name"] == name)["inputSchema"])
+        mcp.validate_tour(args, name == "readit_guide_revise")
+
+    def rejects(self, name, args):
+        with self.assertRaises(mcp.RpcError):
+            self.accepts(name, args)
+
+    def test_step_kinds(self):
+        base = {"title": "t", "body": "説明", "path": "a.py", "line": 1, "column": 1, "expected_text": "a"}
+        legacy = {"id": "legacy", **base}
+        explanation = {"id": "e", "kind": "explanation", **base}
+        hypothesis = {"id": "h", "kind": "hypothesis", **base}
+        prediction = {"id": "p", "kind": "prediction", "prompt": "どうなると思う？", **base}
+        verification = {"id": "v", "kind": "verification", "verifies": "p", **base}
+        self.accepts("readit_guide_load", self.tour_args([legacy]))
+        self.accepts("readit_guide_load", self.tour_args([explanation, hypothesis, prediction, verification]))
+        bad = [
+            [{k: v for k, v in prediction.items() if k != "prompt"}],
+            [{**explanation, "prompt": "?"}],
+            [prediction, {k: v for k, v in verification.items() if k != "verifies"}],
+            [{**hypothesis, "verifies": "p"}],
+            [verification, prediction],  # verifies a later step
+            [explanation, {**verification, "verifies": "e"}],  # not a prediction
+            [prediction, {**verification, "verifies": "missing"}],
+            [{**explanation, "kind": "quiz"}],
+            [explanation, {**hypothesis, "id": "e"}],
+            [{**prediction, "prompt": 1}],
+        ]
+        for steps in bad:
+            self.rejects("readit_guide_load", self.tour_args(steps))
+        # A revision may verify a prediction from the retained history; Readit checks it.
+        revise = {**self.tour_args([verification]), "question_sequence": 1, "answer": "回答"}
+        self.accepts("readit_guide_revise", revise)
+        self.rejects("readit_guide_revise", {**revise, "steps": [verification, prediction]})
+        # The stdio server applies the same rules before contacting the editor.
+        replies = self.exchange(self.init() + [{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "readit_guide_load", "arguments": self.tour_args([{k: v for k, v in prediction.items() if k != "prompt"}])}}])
+        self.assertEqual(replies[1]["error"]["code"], -32602)
+
+    def test_overview_claims_and_reader_context(self):
+        step = {"id": "a", "title": "a", "body": "説明", "path": "a.py", "line": 1, "column": 1, "expected_text": "a"}
+        legacy = {"title": "t", "summary": "s", "relationships": "r", "chapters": [{"title": "c", "summary": "s", "start_step": "a"}]}
+        evidence = {"label": "根拠", "path": "a.py", "line": 1, "column": 1, "expected_text": "a"}
+        claim = {"id": "c1", "statement": "主張", "confidence": "source_confirmed", "evidence": [evidence]}
+        full = {**legacy, "reader_context": {"known": ["async/await"], "focus": ["所有権"]},
+                "claims": [claim, {**claim, "id": "c2", "confidence": "inferred"}]}
+        self.accepts("readit_guide_load", self.tour_args([step], legacy))
+        self.accepts("readit_guide_load", self.tour_args([step], full))
+        self.accepts("readit_guide_load", self.tour_args([step], {**legacy, "reader_context": {}}))
+        bad = [
+            {**legacy, "claims": [claim, claim]},
+            {**legacy, "claims": [{**claim, "id": f"c{i}"} for i in range(9)]},
+            {**legacy, "claims": [{**claim, "confidence": "verified"}]},
+            {**legacy, "claims": [{**claim, "evidence": []}]},
+            {**legacy, "claims": [{**claim, "evidence": [evidence] * 9}]},
+            {**legacy, "claims": [{**claim, "evidence": [{**evidence, "line": "1"}]}]},
+            {**legacy, "claims": [{**claim, "evidence": [{k: v for k, v in evidence.items() if k != "expected_text"}]}]},
+            {**legacy, "claims": [{**claim, "evidence": [{**evidence, "extra": 1}]}]},
+            {**legacy, "claims": [{**claim, "extra": 1}]},
+            {**legacy, "reader_context": {"known": ["x"] * 17}},
+            {**legacy, "reader_context": {"focus": ["x"] * 9}},
+            {**legacy, "reader_context": {"known": [1]}},
+            {**legacy, "reader_context": {"persona": "x"}},
+            {**legacy, "reader_context": ["x"]},
+            {**legacy, "extra": 1},
+        ]
+        for overview in bad:
+            self.rejects("readit_guide_load", self.tour_args([step], overview))
+
     def test_parse_error_and_uninitialized_calls(self):
         output = io.StringIO()
         mcp.serve("/missing", io.BytesIO(b'not-json\n[]\n'), output)

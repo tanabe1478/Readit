@@ -68,3 +68,30 @@ test('the pi watcher delivers each question once and keeps waiting', async ({ pa
     watcher.stop();
   }
 });
+
+test('a recorded prediction does not wake readit_wait.py; a question still does', async ({ page, readit }) => {
+  const state = await ok(readit.socketPath, 'readit_state');
+  await ok(readit.socketPath, 'readit_guide_load', { workspace: state.workspace, id: 'tour', event_sequence: state.guide_event_sequence,
+    steps: [{ id: 'guess', kind: 'prediction', prompt: 'どうなる？', title: 'guess', body: '解説', path: 'sample.py', line: 1, column: 1, expected_text: 'one = 1' },
+      { id: 'two', title: 'two', body: '解説', path: 'sample.py', line: 2, column: 1, expected_text: 'two = 2' }] });
+  const child = spawn('python3', [waitScript, '--socket', readit.socketPath, '--interval', '0.1', '--stop-when-idle']);
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  const exited = new Promise((resolve) => child.on('exit', resolve));
+  try {
+    await page.waitForTimeout(800);
+    await page.locator('#guide-prediction').fill('1のまま');
+    await page.locator('button[data-act="prediction-record"]').click();
+    await expect.poll(async () => (await ok(readit.socketPath, 'readit_state')).guide_tour.predictions.length).toBe(1);
+    await page.waitForTimeout(1000);
+    expect(child.exitCode).toBeNull();
+    await page.locator('button[data-act="guide-next"]').click();
+    await ask(page, '予測の後の質問');
+    await exited;
+    const result = JSON.parse(out.trim());
+    expect(result.status).toBe('question');
+    expect(result.event.question).toBe('予測の後の質問');
+  } finally {
+    child.kill();
+  }
+});

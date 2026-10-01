@@ -397,6 +397,10 @@ fn on_action(act : String, arg : String) -> Unit {
     "guide-send" => submit_guide_question()
     "guide-cancel" => cancel_guide_question()
     "guide-end" => guide_response("end")
+    "prediction-record" => record_prediction(false)
+    "prediction-unknown" => record_prediction(true)
+    "evidence" => open_evidence(arg)
+    "toggle-context" => reader.context_open = !reader.context_open
     "pointer-jump" => jump_pointer()
     "overlay" => ()
     _ => run_key_command(act)
@@ -710,6 +714,7 @@ fn render() -> Unit {
     Some(view) => {
       show_region("guide", true)
       js_set_html("guide-main", view.main)
+      js_set_html("guide-predict", view.predict)
       js_set_html("guide-form", view.form)
       js_set_html("guide-after", view.after)
       js_set_style("guide", "cssText", view.style)
@@ -732,6 +737,10 @@ fn render() -> Unit {
       show_region("guide", false)
       if guide_visible.val {
         js_set_html("guide-form", "")
+      }
+      // A hidden bubble keeps the prediction being typed; an ended one does not.
+      if reader.guide is None {
+        js_set_html("guide-predict", "")
       }
       guide_visible.val = false
     }
@@ -792,6 +801,7 @@ fn apply_focus() -> Unit {
     "query" => "dialog-query"
     "search" => "search-input"
     "guide-question" => "guide-question"
+    "guide-prediction" => "guide-prediction"
     "explorer" => "sidebar"
     "dialog" => "dialog"
     _ => "app"

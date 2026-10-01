@@ -1,18 +1,21 @@
 # Readit
 
-AIが書いたコードを、人が理解するためのIDE。Rust / GPUIのmacOSネイティブアプリです。
+AIが書いたコードを、人が理解するためのIDE。ブラウザで動くWeb版（`web/`）が本体です。
+画面はMoonBitをwasm-gcにコンパイルして動かし、ファイル・Git・言語サーバー・MCPの中継はローカルサーバー（MoonBitをJSにコンパイルしてNode.jsで実行）が担当します。サーバーは `127.0.0.1` だけで待ち受けます。
 ファイルツリー・タブ・編集を基本に、変更の比較とコードナビゲーションを備えます。外部のAIがMCPで同じエディターを操作し、人間の読解を案内できます。
+Rust / GPUIのmacOSネイティブ版は旧版として残しています（[旧版](#旧版ネイティブ版)）。
 
 ## 起動
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run -- --demo
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run -- /absolute/path/to/repository
+cd web
+npm install
+npm run build
+npm start -- /absolute/path/to/repository --control-socket ~/.readit/control.sock
 ```
 
-Rust stable、Xcode、Gitが必要です。開発時はMetalシェーダーを実行時コンパイルします。
-`python3 scripts/package_macos.py` で `artifacts/Readit.app` を更新できます。
-これはアドホック署名のローカル開発版です。サンプルはこのリポジトリ内の `demo/` を参照します。
+MoonBit（`moon`）、Node.js 24、npm、Gitが必要です。`npm start` は既定のブラウザで `http://127.0.0.1:7420/` を開きます。
+引数を省くと、このリポジトリ内の `demo/` を開きます。詳しくは [web/README.md](web/README.md) を参照してください。
 
 ## ファイル・閲覧・編集
 
@@ -20,10 +23,10 @@ Rust stable、Xcode、Gitが必要です。開発時はMetalシェーダーを�
 - 長いファイル名は1行で省略。ホバーでフルパスを表示し、サイドバー右端のドラッグで幅を変更。
 - 複数タブ、×／中クリックで閉じる、閉じたタブの復元、タブ切替。編集中の内容・カーソル・Undo履歴をタブごとに保持。
 - 本文の直接編集、複数行選択、コピー・切り取り・貼り付け、Undo/Redo、インデント。
-- Tree-sitterによるPython、Rust、JS/TS、TSX、JSON、Markdown、HTML/CSS、Goなどの構文ハイライト。
+- Tree-sitterによるPython、Rust、JS/TS、TSX、JSON、Markdown、HTML/CSS、Go、MoonBitなどの構文ハイライト。
 - 行番号、カーソル位置、横・縦スクロール、折返し、文字サイズ変更。
-- ネイティブダイアログでファイル／フォルダを開く。新規ファイル／フォルダ、保存、すべて保存、名前を付けて保存。
-- ファイル／フォルダの名前変更・移動、削除、復元。右クリックメニューとmacOSメニューバーからも操作可能。
+- macOSではネイティブダイアログでファイル／フォルダを開く（他のOSではパスを入力）。新規ファイル／フォルダ、保存、すべて保存、名前を付けて保存。
+- ファイル／フォルダの名前変更・移動、削除、復元。右クリックメニューと画面上部のメニューからも操作可能。
 - 未保存のタブを閉じる・終了・プロジェクト切替・再読込の際に、保存／破棄／キャンセルを確認。
 - 外部変更があるファイルへの保存・削除を拒否。既存パスへの新規保存・名前変更・復元では上書きしません。
 - クイックオープン、プロジェクト内の文字列検索、ファイル内検索（大文字小文字・正規表現切替）、文字列置換、行:列への移動、移動履歴、コマンドパレット。
@@ -58,11 +61,12 @@ Rust stable、Xcode、Gitが必要です。開発時はMetalシェーダーを�
 
 本文では矢印、Shift+矢印、⌥+左右の単語移動、⌘+左右の行頭末尾、⌘+上下の文書先頭末尾、Page Up/Downを利用できます。
 アプリの「Readit → キーボードショートカット」でも操作一覧を開けます。
+ブラウザが先に使うキーがあるため、⌃W（タブを閉じる）、⌃N（新規ファイル）、⌃⇧T（閉じたタブを開く）、⌃Q（終了）、⌥⌘← / →（タブ切替）でも操作できます。
 
 ## コードを辿る（0.3）
 
 カーソルを識別子に置き、上部の「定義」「使用箇所」「シンボル」「型・説明」、
-macOSの「移動」メニュー、または次のキーで解析を実行できます。
+画面上部の「移動」メニュー、または次のキーで解析を実行できます。
 
 | 操作 | キー |
 | --- | --- |
@@ -115,7 +119,6 @@ TypeScript 5.9.3を固定しています。JavaはEclipse JDT Language Server 1.
 セットアップはReadit専用ディレクトリにnpm依存を導入し、ローカルの実行パスを
 `tools/lsp/runtime.json`へ記録します。開いた対象プロジェクトには依存を追加しません。
 `READIT_NODE`、`READIT_RUST_ANALYZER`、`READIT_JAVA`環境変数でも実行ファイルを指定できます。
-`.app`も現在はこのリポジトリ内の言語サーバーを参照するローカル開発版です。
 
 解析はローカルの別プロセスで実行し、UIを待たせません。サーバーは初回利用時に起動します。
 Rustのbuild script・proc macro・自動チェックは無効にしています。診断表示、補完、
@@ -128,11 +131,13 @@ Rustのbuild script・proc macro・自動チェックは無効にしています
 MCP経由で現在の画面・未保存の本文を取得し、ファイルを開く、範囲を選択する、定義や使用箇所を表示する、移動履歴を戻る、差分表示を切り替える操作ができます。
 
 ```sh
-./artifacts/Readit.app/Contents/MacOS/Readit --demo --control-socket /tmp/readit-guide/control.sock
+cd web && npm start -- /absolute/path/to/repository --control-socket ~/.readit/control.sock
 ```
 
 [接続設定と操作一覧](docs/mcp.md)、[読解ガイド用skill](skills/readit-guide/SKILL.md)を参照してください。
 MCP設定やskillのインストール先はAIクライアントごとに指定します。設定ファイルを自動で変更することはありません。
+
+吹き出しから送った質問は、チャットで知らせなくてもAIに届きます。Claude Codeはskillの手順で `tools/readit_wait.py` をバックグラウンドで実行し、piは [integrations/pi](integrations/pi/README.md) のパッケージ（MCPサーバー・skill・質問の受け渡しをまとめたもの）を使います。詳しくは [MCP操作](docs/mcp.md#質問をaiへ自動で届ける) を参照してください。
 
 ファイル名による「背景・契約・実装・検証・設定」の仮の読む順番も利用できます。
 「差分」は保存前の本文を含めた比較です。GitルートではHEAD、それ以外では開いた時点の本文と比較します。
@@ -144,15 +149,16 @@ MCP設定やskillのインストール先はAIクライアントごとに指定�
 ## 検証
 
 ```sh
-cargo test --offline
-cargo test --offline --test language_services -- --ignored
-python3 -m unittest discover -s demo/tests -p 'test_*.py'
+cd web
+moon test                 # core / editor / lsp の単体テスト
+npm run test:e2e          # Playwright（Chromium と WebKit）
+cd ..
 python3 -m unittest discover -s tests/python
+python3 -m unittest discover -s demo/tests -p 'test_*.py'
 ```
 
-ファイル・フォルダの作成／名前変更／削除／復元、上書き防止、外部変更、Git基準、引用記録、差分、ツリーをテストしています。
-実画面でも直接編集、色分け、タブ操作、Undo/Redo、検索、保存、削除／復元を確認しています。
-LSPの結合テストは実際の4言語サーバーを起動し、importの別名・スコープの区別・未保存編集・定義・参照・型・実装の解決を確認します。通常のテストでは未導入環境を考慮してignoreし、上記コマンドで明示実行します。
+E2Eテストは一時ディレクトリにプロジェクトを作り、実際のサーバーとブラウザの画面を操作します。編集、ファイル操作、差分、LSPによる4言語の定義解決、MCP操作、読解ガイド、質問の受け渡しを確認しています。
+Javaの言語サーバーのテストは初回の取り込みが遅いため、`READIT_TEST_JAVA=1` を付けたときだけ実行します。
 
 ## 現段階の範囲
 
@@ -171,10 +177,9 @@ LSPの補完・診断、マルチカーソル、エディタ分割、ドラッ�
 
 ## 技術と商用化
 
-[構成とライセンス](docs/architecture-and-licensing.md) / [製品設計](docs/product.md) / [第三者ライセンス](THIRD_PARTY_NOTICES.md)
+[製品設計](docs/product.md) / [Web版の構成と第三者の部品](web/README.md)
 
-GPUI 0.2.2、GPUI Component 0.5.1、Tree-sitterによる独立アプリです。
-GPUI ComponentはApache-2.0で、ZedのGPL編集エンジンは組み込んでいません。
+Web版はMoonBit、web-tree-sitterとTree-sitterの各文法（MIT・Apache-2.0）で構成しています。
 自作部分を非公開で販売する方針を維持しています。製品配布前に最終同梱物のライセンス確認が必要です。
 
 関連コードは本文上の「横に固定」または ⌘K → ⌘P で右側に残せます。固定時点の読み取り専用表示で、元の本文が変わった場合は「更新」で取り直します。MCPは `readit_pin` / `readit_unpin` に対応しています。
@@ -185,7 +190,30 @@ GPUI ComponentはApache-2.0で、ZedのGPL編集エンジンは組み込んで�
 
 外部AIが事前に作った目的・構成と処理の流れ・章ごとの概要を「概観」タブで確認し、章から実コードの吹き出しガイドへ進めます。寄り道した後も概観へ戻れます。MCPの `readit_guide_load` に `overview` を添えて登録します。説明と対象コードを検証してから一括登録し、章の移動にはAI応答を待ちません。現在のガイドはウィンドウ内で保持され、再起動時には再登録が必要です。詳細は [MCP仕様](docs/mcp.md) を参照してください。
 
+### 根拠と予測で読む
 
-### 性能の計測
+AIの説明を読むだけで終わらせず、読む人が自分でコードを確かめるための仕組みです。概観の重要な主張には根拠のコードが付き、「コード上で確認」か「推論」かが分かります。根拠を開いてもガイドの進み具合は変わりません。ガイドの途中には、先に自分の予測を書いてから進む「予測」と、その予測を実際のコードと並べて見る「検証」のステップを置けます。予測は採点せず、AIの応答も待ちません。詳細は [MCP仕様](docs/mcp.md#根拠前提予測で読む) を参照してください。
 
-通常のmacOSパッケージは `cargo build --release --offline` の後に `python3 scripts/package_macos.py` で作成します。開発版を使う場合は `--profile debug` を明示します。`--features performance` を付けたビルドでは `READIT_PERF=/tmp/readit.jsonl READIT_PERF_SECONDS=60` でローカルCPU処理時間を収集し、`python3 scripts/perf_report.py /tmp/readit.jsonl` で集計できます。通常ビルドに収集器は含まれません。[計測手順と実測結果](docs/performance-investigation.md)を参照してください。
+
+## 旧版（ネイティブ版）
+
+Rust / GPUIのmacOSネイティブアプリです（`src/`、`Cargo.toml`）。今後の開発はWeb版で行い、旧版は参照用に残しています。機能とMCPの操作はWeb版と同じです。
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run -- --demo
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run -- /absolute/path/to/repository --control-socket /tmp/readit-guide/control.sock
+```
+
+Rust stable、Xcode、Gitが必要です。開発時はMetalシェーダーを実行時コンパイルします。
+`cargo build --release --offline` の後に `python3 scripts/package_macos.py` で `artifacts/Readit.app` を作成できます（アドホック署名のローカル開発版）。
+
+テスト:
+
+```sh
+cargo test --offline
+cargo test --offline --test language_services -- --ignored
+```
+
+GPUI 0.2.2、GPUI Component 0.5.1、Tree-sitterによる独立アプリです。GPUI ComponentはApache-2.0で、ZedのGPL編集エンジンは組み込んでいません。[構成とライセンス](docs/architecture-and-licensing.md) / [第三者ライセンス](THIRD_PARTY_NOTICES.md)
+
+`--features performance` を付けたビルドでは `READIT_PERF=/tmp/readit.jsonl READIT_PERF_SECONDS=60` でローカルCPU処理時間を収集し、`python3 scripts/perf_report.py /tmp/readit.jsonl` で集計できます。[計測手順と実測結果](docs/performance-investigation.md)を参照してください。

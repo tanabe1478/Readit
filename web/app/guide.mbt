@@ -70,8 +70,29 @@ fn control_text(path : String) -> String raise Failure {
 }
 
 ///|
+/// The source range one anchor names, checked against current text.
+fn anchor_range(
+  args : Json,
+  path : String,
+  expected : String,
+) -> (String, Int, Int) raise Failure {
+  let source = control_text(path)
+  guard json_int(args, "line") is Some(line) else { fail("line is required") }
+  guard json_int(args, "column") is Some(column) else {
+    fail("column is required")
+  }
+  let start = @core.offset_at(source, line, column)
+  let end = start + expected.length()
+  if end > source.length() || @core.slice(source, start, end) != expected {
+    fail("source changed or expected_text does not match")
+  }
+  (source, start, end)
+}
+
+///|
 /// Validate one step against current text. Texts must already be loaded.
-fn prepare_guide(args : Json) -> Guide raise Failure {
+/// Step kinds belong to prepared tours; a single guide_show bubble has none.
+fn prepare_guide(args : Json, in_tour? : Bool = true) -> Guide raise Failure {
   let field = (name : String, max : Int) => {
     match json_text(args, name) {
       None => fail("\{name} is required")
@@ -89,15 +110,35 @@ fn prepare_guide(args : Json) -> Guide raise Failure {
   let expected = field("expected_text", 16000)
   guard json_text(args, "path") is Some(raw) else { fail("path is required") }
   let path = control_path(raw)
-  let source = control_text(path)
-  guard json_int(args, "line") is Some(line) else { fail("line is required") }
-  guard json_int(args, "column") is Some(column) else {
-    fail("column is required")
+  let (source, start, end) = anchor_range(args, path, expected)
+  let kind = match json_field(args, "kind") {
+    None => "explanation"
+    Some(_) if !in_tour => fail("step kinds are supported in prepared tours only")
+    Some(String("explanation" | "hypothesis" | "prediction" | "verification" as k)) =>
+      k
+    Some(_) =>
+      fail("kind must be explanation, hypothesis, prediction or verification")
   }
-  let start = @core.offset_at(source, line, column)
-  let end = start + expected.length()
-  if end > source.length() || @core.slice(source, start, end) != expected {
-    fail("source changed or expected_text does not match")
+  let prompt = match json_field(args, "prompt") {
+    None =>
+      if kind == "prediction" {
+        fail("prediction steps require prompt")
+      } else {
+        None
+      }
+    Some(_) if kind != "prediction" => fail("prompt is for prediction steps only")
+    Some(_) => Some(field("prompt", 2000))
+  }
+  let verifies = match json_field(args, "verifies") {
+    None =>
+      if kind == "verification" {
+        fail("verification steps require verifies")
+      } else {
+        None
+      }
+    Some(_) if kind != "verification" =>
+      fail("verifies is for verification steps only")
+    Some(_) => Some(field("verifies", 128))
   }
   {
     id,
@@ -108,6 +149,10 @@ fn prepare_guide(args : Json) -> Guide raise Failure {
     end,
     title,
     body,
+    kind,
+    prompt,
+    verifies,
+    prediction_error: None,
     question_open: false,
     pending_question: None,
     question: None,
@@ -135,7 +180,42 @@ fn step_paths(args : Json) -> Array[String] {
       }
     _ => add(args)
   }
+  match json_field(args, "overview") {
+    Some(Object({ "claims": Array(claims), .. })) =>
+      for c in claims {
+        if json_field(c, "evidence") is Some(Array(items)) {
+          for ev in items {
+            add(ev)
+          }
+        }
+      }
+    _ => ()
+  }
   out
+}
+
+///|
+/// A verification step must follow the prediction it answers.
+fn check_step_links(steps : Array[Guide]) -> Unit raise Failure {
+  for i, step in steps {
+    guard step.verifies is Some(target) else { continue }
+    let mut found = -1
+    for j, other in steps {
+      if other.id == target {
+        found = j
+        break
+      }
+    }
+    if found < 0 {
+      fail("verifies must name a step in this tour")
+    }
+    if found >= i {
+      fail("verifies must name an earlier step")
+    }
+    if steps[found].kind != "prediction" {
+      fail("verifies must name a prediction step")
+    }
+  }
 }
 
 ///|
@@ -164,7 +244,12 @@ fn prepare_steps(args : Json, allow_empty : Bool) -> Array[Guide] raise Failure 
 fn parse_overview(value : Json, steps : Array[Guide]) -> Overview raise Failure {
   guard value is Object(o) else { fail("overview must be an object") }
   for k in o.keys() {
-    if k != "title" && k != "summary" && k != "relationships" && k != "chapters" {
+    if k != "title" &&
+      k != "summary" &&
+      k != "relationships" &&
+      k != "chapters" &&
+      k != "reader_context" &&
+      k != "claims" {
       fail("unknown field `\{k}` in overview")
     }
   }
@@ -217,7 +302,120 @@ fn parse_overview(value : Json, steps : Array[Guide]) -> Overview raise Failure 
     previous = index
     parsed.push({ title: ct, summary: cs, start_step: start, })
   }
-  { title, summary, relationships, chapters: parsed, }
+  let reader_context = match o.get("reader_context") {
+    None => None
+    Some(value) => Some(parse_reader_context(value))
+  }
+  let claims = match o.get("claims") {
+    None => None
+    Some(value) => Some(parse_claims(value))
+  }
+  { title, summary, relationships, chapters: parsed, reader_context, claims }
+}
+
+///|
+fn parse_reader_context(value : Json) -> ReaderContext raise Failure {
+  guard value is Object(o) else { fail("reader_context must be an object") }
+  for k in o.keys() {
+    if k != "known" && k != "focus" {
+      fail("unknown field `\{k}` in reader_context")
+    }
+  }
+  let list = (key : String, max : Int) => {
+    let items = match o.get(key) {
+      None => []
+      Some(Array(items)) => items
+      Some(_) => fail("reader_context.\{key} must be an array")
+    }
+    if items.length() > max {
+      fail("reader_context.\{key} allows at most \{max} items")
+    }
+    items.map(item => {
+      match item {
+        String(t) if chars_within(t, 200) => t
+        _ => fail("reader_context.\{key} items must contain 1..200 characters")
+      }
+    })
+  }
+  { known: list("known", 16), focus: list("focus", 8) }
+}
+
+///|
+/// Claims and their evidence, each checked against current source.
+fn parse_claims(value : Json) -> Array[Claim] raise Failure {
+  guard value is Array(items) else { fail("claims must be an array") }
+  if items.length() > 8 {
+    fail("overview allows at most 8 claims")
+  }
+  let ids : Map[String, Unit] = Map([])
+  let claims = []
+  for item in items {
+    guard item is Object(o) else { fail("claim must be an object") }
+    for k in o.keys() {
+      if k != "id" && k != "statement" && k != "confidence" && k != "evidence" {
+        fail("unknown field `\{k}` in claim")
+      }
+    }
+    let id = match json_text(item, "id") {
+      Some(t) if chars_within(t, 128) => t
+      _ => fail("claim id must contain 1..128 characters")
+    }
+    if ids.contains(id) {
+      fail("claim ids must be unique")
+    }
+    ids[id] = ()
+    let statement = match json_text(item, "statement") {
+      Some(t) if chars_within(t, 1000) => t
+      _ => fail("claim statement must contain 1..1000 characters")
+    }
+    let confidence = match json_text(item, "confidence") {
+      Some("source_confirmed" | "inferred" as c) => c
+      _ => fail("claim confidence must be source_confirmed or inferred")
+    }
+    let evidence = match o.get("evidence") {
+      Some(Array(list)) if list.length() >= 1 && list.length() <= 8 => list
+      _ => fail("each claim needs 1..8 evidence anchors")
+    }
+    claims.push({
+      id,
+      statement,
+      confidence,
+      evidence: evidence.map(parse_evidence),
+    })
+  }
+  claims
+}
+
+///|
+fn parse_evidence(value : Json) -> Evidence raise Failure {
+  guard value is Object(o) else { fail("evidence must be an object") }
+  for k in o.keys() {
+    if k != "label" &&
+      k != "path" &&
+      k != "line" &&
+      k != "column" &&
+      k != "expected_text" {
+      fail("unknown field `\{k}` in evidence")
+    }
+  }
+  let label = match json_text(value, "label") {
+    Some(t) if chars_within(t, 100) => t
+    _ => fail("evidence label must contain 1..100 characters")
+  }
+  let expected = match json_text(value, "expected_text") {
+    Some(t) if chars_within(t, 16000) => t
+    _ => fail("evidence expected_text must contain 1..16000 characters")
+  }
+  guard json_text(value, "path") is Some(raw) else {
+    fail("evidence path is required")
+  }
+  let path = control_path(raw)
+  // Definitions outside the project resolve to absolute paths.
+  if @core.starts_with(path, "/") {
+    fail("evidence path must be a workspace file")
+  }
+  let (source, start, end) = anchor_range(value, path, expected)
+  { label, path, source, start, end }
 }
 
 ///|
@@ -285,13 +483,21 @@ fn activate_guide(guide : Guide, then : (Result[Unit, String]) -> Unit) -> Unit 
 }
 
 ///|
-fn guide_step(direction : Int) -> Unit {
+/// Chapter jumps pass `gate=false`: the reader may skip ahead from the
+/// overview, but Next on a prediction step waits for their answer.
+fn guide_step(direction : Int, gate? : Bool = true) -> Unit {
   validate_guide()
   guard reader.tour is Some(tour) else {
     guide_response("next")
     return
   }
   if reader.guide is Some(g) && g.question_open {
+    return
+  }
+  if gate && direction > 0 && reader.guide is Some(g) && prediction_pending(tour, g) {
+    g.prediction_error = Some(
+      "予測を記録するか「わからない」を選ぶと次へ進めます。",
+    )
     return
   }
   let next = tour.index + direction
@@ -485,7 +691,15 @@ fn show_overview() -> Unit {
 fn refresh_disk_cache() -> Unit {
   guard reader.tour is Some(tour) else { return }
   reader.disk_refresh = js_now()
-  load_texts(tour.steps.map(g => g.path), () => ())
+  let paths = tour.steps.map(g => g.path)
+  if tour.overview is Some({ claims: Some(claims), .. }) {
+    for c in claims {
+      for ev in c.evidence {
+        paths.push(ev.path)
+      }
+    }
+  }
+  load_texts(paths, () => ())
 }
 
 ///|
@@ -528,5 +742,108 @@ fn open_chapter(i : Int) -> Unit {
     return
   }
   let (start, _) = chapter_bounds(tour, overview, i)
-  guide_step(start - tour.index)
+  guide_step(start - tour.index, gate=false)
+}
+
+///|
+fn tour_prediction(tour : Tour, step_id : String) -> Prediction? {
+  for p in tour.predictions {
+    if p.step_id == step_id {
+      return Some(p)
+    }
+  }
+  None
+}
+
+///|
+/// Next waits on a prediction step until the reader commits to an answer.
+fn prediction_pending(tour : Tour, guide : Guide) -> Bool {
+  guide.kind == "prediction" && tour_prediction(tour, guide.id) is None
+}
+
+///|
+/// Record the reader's prediction locally. No AI is asked to respond.
+fn record_prediction(unknown : Bool) -> Unit {
+  validate_guide()
+  guard reader.tour is Some(tour) && reader.guide is Some(guide) else { return }
+  if !prediction_pending(tour, guide) ||
+    tour.steps[tour.index].id != guide.id {
+    return
+  }
+  let answer = if unknown {
+    None
+  } else {
+    let text = @core.trim(js_get_value("guide-prediction"))
+    if text == "" || @core.char_count(text) > 2000 {
+      guide.prediction_error = Some(
+        "予測を1〜2,000文字で入力するか、「わからない」を選んでください。",
+      )
+      return
+    }
+    Some(text)
+  }
+  let status = if unknown { "unknown" } else { "answered" }
+  tour.predictions.push({ step_id: guide.id, status, answer })
+  guide.prediction_error = None
+  guide_event({
+    "id": guide.id,
+    "action": "prediction",
+    "tour_id": tour.id,
+    "status": status,
+    "answer": match answer {
+      Some(a) => Json::string(a)
+      None => Json::null()
+    },
+    "workspace": guide.root,
+    "path": reader.workspace.absolute(guide.path),
+  })
+  focus_editor()
+}
+
+///|
+/// Evidence is numbered across all claims, in display order.
+fn evidence_at(overview : Overview, index : Int) -> Evidence? {
+  guard overview.claims is Some(claims) else { return None }
+  let mut k = 0
+  for c in claims {
+    for ev in c.evidence {
+      if k == index {
+        return Some(ev)
+      }
+      k += 1
+    }
+  }
+  None
+}
+
+///|
+fn evidence_stale(ev : Evidence) -> Bool {
+  match known_text(ev.path) {
+    Some(text) => text != ev.source
+    None => reader.disk_cache.contains(ev.path)
+  }
+}
+
+///|
+/// Show a claim's evidence as a detour: the tour position, visited history and
+/// chapter progress stay as they are, and the overview tab remains.
+fn open_evidence(arg : String) -> Unit {
+  guard @core.parse_natural(arg) is Some(index) else { return }
+  guard reader.tour is Some(tour) &&
+    tour.overview is Some(overview) &&
+    evidence_at(overview, index) is Some(ev) else {
+    return
+  }
+  if dialog_open() {
+    return
+  }
+  let root = tour.steps[0].root
+  load_texts([ev.path], () => {
+    let text = control_text(ev.path) catch { _ => "\u{0}" }
+    if reader.workspace.root != root || text != ev.source {
+      say("ソースが変更されています。このガイドを更新してください。")
+      return
+    }
+    open_range(ev.path, ev.source, ev.start, ev.end, true, () => ())
+  })
 }

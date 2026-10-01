@@ -205,3 +205,239 @@ test.describe('bubble placement', () => {
     expect(fs.readFileSync(path.join(readit.project, 'sample.py'), 'utf8')).toBe(source);
   });
 });
+
+test.describe('evidence-backed overview', () => {
+  test.use({ files: { 'sample.py': 'one = 1\ntwo = 2\n', 'store.py': 'class Store:\n    cache = {}\n' } });
+  test('claims show confidence and open evidence as a detour', async ({ page, readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    const steps = [step('one', 1, 'one = 1'), step('two', 2, 'two = 2')];
+    const evidence = { label: 'キャッシュの保持', path: 'store.py', line: 2, column: 5, expected_text: 'cache = {}' };
+    const overview = { title: '値と保存', summary: '値と保存先を読む', relationships: 'sample.py → store.py',
+      reader_context: { known: ['Python のクラス'], focus: ['キャッシュの寿命'] },
+      claims: [
+        { id: 'store-owns', statement: 'Store がキャッシュを持つ', confidence: 'source_confirmed', evidence: [evidence] },
+        { id: 'intent', statement: '保存先を一か所に集める意図がある', confidence: 'inferred',
+          evidence: [evidence, { label: '値の定義', path: 'sample.py', line: 2, column: 1, expected_text: 'two = 2' }] }],
+      chapters: [{ title: '値', summary: '値を読む', start_step: 'one' }] };
+    const load = (overview) => ({ workspace: root, id: 'evidence-tour', event_sequence: 0, steps, overview });
+    // A stale evidence anchor rejects the whole load and keeps the current tour.
+    await ok(s, 'readit_guide_load', { workspace: root, id: 'before', event_sequence: 0, steps: [step('one', 1, 'one = 1')] });
+    const sequence = () => ok(s, 'readit_state').then((st) => st.guide_event_sequence);
+    for (const bad of [
+      { ...overview, claims: [{ ...overview.claims[0], evidence: [{ ...evidence, expected_text: 'cache = []' }] }] },
+      { ...overview, claims: [{ ...overview.claims[0], evidence: [{ ...evidence, path: '/etc/hosts' }] }] },
+      { ...overview, claims: [overview.claims[0], overview.claims[0]] },
+      { ...overview, reader_context: { known: Array(17).fill('x') } },
+    ]) {
+      expect((await control(s, 'readit_guide_load', { ...load(bad), event_sequence: await sequence() })).error).toBeTruthy();
+      expect((await ok(s, 'readit_state')).guide_tour.id).toBe('before');
+    }
+    await ok(s, 'readit_guide_load', { ...load(overview), event_sequence: await sequence() });
+    const view = page.locator('#overview');
+    await expect(view).toContainText('今回の重要なポイント');
+    await expect(view.locator('.claim').nth(0)).toContainText('コード上で確認');
+    await expect(view.locator('.claim').nth(1)).toContainText('推論');
+    await expect(view.locator('.evidence').nth(0)).toContainText('store.py:2');
+    // The reader context starts collapsed.
+    await expect(view).not.toContainText('キャッシュの寿命');
+    await view.locator('[data-act="toggle-context"]').click();
+    await expect(view).toContainText('知っている前提');
+    await expect(view).toContainText('キャッシュの寿命');
+    // The overview round-trips through readit_state.
+    let state = await ok(s, 'readit_state');
+    expect(state.guide_tour.overview.claims[1].evidence[1]).toEqual({ label: '値の定義', path: 'sample.py', line: 2, column: 1, expected_text: 'two = 2' });
+    expect(state.guide_tour.overview.reader_context).toEqual(overview.reader_context);
+    const before = { index: state.guide_tour.index, visited: state.guide_tour.visited_through, seen: state.guide_tour.seen_steps };
+    await view.locator('.evidence').nth(0).click();
+    await expect(page.locator('.tab.selected')).toContainText('store.py');
+    state = await ok(s, 'readit_state');
+    expect(state.selection.text).toBe('cache = {}');
+    expect(state.overview_visible).toBe(false);
+    expect({ index: state.guide_tour.index, visited: state.guide_tour.visited_through, seen: state.guide_tour.seen_steps }).toEqual(before);
+    await expect(page.locator('.tab', { hasText: '概観' })).toBeVisible();
+    // Evidence whose source changed does not move the editor.
+    // Typing replaces the selected evidence text.
+    await page.keyboard.type('cache = []');
+    await page.locator('#topbar button[data-act="overview"]').click();
+    await expect(view.locator('.evidence').nth(0)).toContainText('変更あり');
+    await view.locator('.evidence').nth(0).click();
+    await expect(page.locator('#status')).toContainText('ソースが変更されています');
+    expect((await ok(s, 'readit_state')).overview_visible).toBe(true);
+    // Other evidence still opens.
+    await view.locator('.evidence').nth(2).click();
+    state = await ok(s, 'readit_state');
+    expect(state.selection.text).toBe('two = 2');
+    expect(state.guide_tour.visited_through).toBe(before.visited);
+    // A revision whose evidence is stale changes nothing: answer, guide and overview stay.
+    await page.locator('#topbar button[data-act="overview"]').click();
+    await page.locator('button[data-act="chapter"][data-arg="0"]').click();
+    await page.locator('button[data-act="guide-ask"]').click();
+    await page.locator('#guide-question').fill('なぜ store.py？');
+    await page.locator('button[data-act="guide-send"]').click();
+    state = await ok(s, 'readit_state');
+    const revise = (overview) => ({ workspace: root, id: 'evidence-tour', event_sequence: state.guide_event_sequence,
+      question_sequence: state.guide_event_sequence, answer: '保存先だからです', steps: [step('two', 2, 'two = 2')], overview });
+    expect((await control(s, 'readit_guide_revise', revise(overview))).error).toMatch(/source changed/);
+    const after = await ok(s, 'readit_state');
+    expect(after.guide.pending_question).toBe(state.guide_event_sequence);
+    expect(after.guide.answer).toBeNull();
+    expect(after.guide_tour.overview).toEqual(state.guide_tour.overview);
+    const fresh = { ...overview, claims: [{ ...overview.claims[0], evidence: [{ ...evidence, expected_text: 'cache = []' }] }] };
+    await ok(s, 'readit_guide_revise', revise(fresh));
+    await expect(page.locator('#guide')).toContainText('保存先だからです');
+    expect((await ok(s, 'readit_state')).guide_tour.overview.claims).toHaveLength(1);
+  });
+});
+
+test.describe('prediction and verification', () => {
+  test.use({ files: { 'sample.py': 'cache = {}\ndef drop():\n    cache.clear()\nprint(cache)\n' } });
+  const tour = () => [
+    { ...step('hyp', 1, 'cache = {}'), kind: 'hypothesis', body: 'モジュールがキャッシュを持つように見えます。' },
+    { ...step('guess', 2, 'def drop():'), kind: 'prediction', prompt: 'drop() の後、キャッシュはどうなると思いますか？' },
+    { ...step('plain', 4, 'print(cache)') },
+    { ...step('check', 3, '    cache.clear()'), kind: 'verification', verifies: 'guess', body: 'clear() で中身だけ消えます。' },
+  ];
+
+  test('a prediction gates Next, is kept across Back, and appears at verification', async ({ page, readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    const load = (steps) => ({ workspace: root, id: 'predict', event_sequence: 0, steps });
+    for (const steps of [
+      [{ ...tour()[1], prompt: undefined }],
+      [tour()[3], tour()[1]],
+      [tour()[0], { ...tour()[3], verifies: 'hyp' }],
+      [{ ...tour()[0], prompt: '?' }],
+      [{ ...tour()[0], kind: 'quiz' }],
+    ]) {
+      expect((await control(s, 'readit_guide_load', load(JSON.parse(JSON.stringify(steps))))).error).toBeTruthy();
+    }
+    expect((await ok(s, 'readit_state')).guide_tour).toBeNull();
+    // Kinds belong to prepared tours; a single bubble has no Next of its own to gate.
+    expect((await control(s, 'readit_guide_show', { workspace: root, event_sequence: 0, ...tour()[1] })).error).toMatch(/prepared tours/);
+    await ok(s, 'readit_guide_load', load(tour()));
+    const bubble = page.locator('#guide');
+    await expect(bubble.locator('.guide-kind')).toHaveText('仮説');
+    await page.locator('button[data-act="guide-next"]').click();
+    await expect(bubble.locator('.guide-kind')).toHaveText('予測');
+    await expect(bubble).toContainText('drop() の後、キャッシュはどうなると思いますか？');
+    const next = page.locator('button[data-act="guide-next"]');
+    await expect(next).toBeDisabled();
+    // Back and file navigation stay available.
+    await page.locator('button[data-act="guide-back"]').click();
+    expect((await ok(s, 'readit_state')).guide.id).toBe('hyp');
+    await page.locator('button[data-act="guide-next"]').click();
+    await expect(next).toBeDisabled();
+    // An empty prediction is not recorded.
+    await page.locator('button[data-act="prediction-record"]').click();
+    await expect(bubble).toContainText('予測を1〜2,000文字で入力');
+    await expect(next).toBeDisabled();
+    await page.locator('#guide-prediction').fill('中身が空になると思う');
+    await page.locator('button[data-act="prediction-record"]').click();
+    await expect(next).toBeEnabled();
+    await expect(bubble.locator('.guide-prior')).toContainText('「中身が空になると思う」');
+    await expect(page.locator('#guide-prediction')).toHaveCount(0);
+    let state = await ok(s, 'readit_state');
+    expect(state.guide_tour.predictions).toEqual([{ step_id: 'guess', status: 'answered', answer: '中身が空になると思う' }]);
+    expect(state.guide_tour.steps.map((g) => g.kind)).toEqual(['hypothesis', 'prediction', 'explanation', 'verification']);
+    const events = await ok(s, 'readit_guide_events', { workspace: root, after: 0 });
+    const recorded = events.events.find((e) => e.action === 'prediction');
+    expect(recorded).toMatchObject({ id: 'guess', tour_id: 'predict', status: 'answered', answer: '中身が空になると思う' });
+    // Back and forth keeps the answer.
+    await page.locator('button[data-act="guide-back"]').click();
+    await page.locator('button[data-act="guide-next"]').click();
+    await expect(bubble.locator('.guide-prior')).toContainText('「中身が空になると思う」');
+    await expect(next).toBeEnabled();
+    await next.click();
+    await next.click();
+    await expect(bubble.locator('.guide-kind')).toHaveText('検証');
+    await expect(bubble.locator('.guide-prior')).toContainText('あなたの予測');
+    await expect(bubble.locator('.guide-prior')).toContainText('「中身が空になると思う」');
+    await expect(bubble).toContainText('実際のコード');
+    await expect(bubble).toContainText('clear() で中身だけ消えます。');
+    // No grading anywhere.
+    for (const word of ['正解', '不正解', '理解度']) await expect(bubble).not.toContainText(word);
+    // A question still goes to the AI as before.
+    await page.locator('button[data-act="guide-ask"]').click();
+    await page.locator('#guide-question').fill('clear と再代入の違いは？');
+    await page.locator('button[data-act="guide-send"]').click();
+    state = await ok(s, 'readit_state');
+    expect(state.guide.pending_question).toBe(state.guide_event_sequence);
+    // A revision keeps the recorded prediction, and may verify it again.
+    await ok(s, 'readit_guide_revise', { workspace: root, id: 'predict', event_sequence: state.guide_event_sequence,
+      question_sequence: state.guide_event_sequence, answer: '再代入は別の dict を作ります。',
+      steps: [{ ...step('again', 4, 'print(cache)'), kind: 'verification', verifies: 'guess' }] });
+    state = await ok(s, 'readit_state');
+    expect(state.guide_tour.predictions).toEqual([{ step_id: 'guess', status: 'answered', answer: '中身が空になると思う' }]);
+    expect((await control(s, 'readit_guide_revise', { workspace: root, id: 'predict', event_sequence: state.guide_event_sequence,
+      question_sequence: state.guide_event_sequence, answer: 'x', steps: [] })).error).toBeTruthy();
+    await ok(s, 'readit_guide_clear', { workspace: root });
+    expect((await ok(s, 'readit_state')).guide_tour).toBeNull();
+  });
+
+  test('"unknown" is recorded and shown at verification', async ({ page, readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    await ok(s, 'readit_guide_load', { workspace: root, id: 'predict', event_sequence: 0, steps: tour().slice(1) });
+    await page.locator('#guide-prediction').fill('書きかけ');
+    await page.locator('button[data-act="prediction-unknown"]').click();
+    const state = await ok(s, 'readit_state');
+    expect(state.guide_tour.predictions).toEqual([{ step_id: 'guess', status: 'unknown', answer: null }]);
+    await page.locator('button[data-act="guide-next"]').click();
+    await page.locator('button[data-act="guide-next"]').click();
+    await expect(page.locator('#guide .guide-prior')).toHaveText(/あなたの予測\s*わからない/);
+  });
+
+  test('Enter records a prediction typed in the bubble', async ({ page, readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    await ok(s, 'readit_guide_load', { workspace: root, id: 'predict', event_sequence: 0, steps: tour().slice(1, 2) });
+    await page.locator('#guide-prediction').click();
+    await page.keyboard.type('一行目');
+    await page.keyboard.press('Shift+Enter');
+    await page.keyboard.type('二行目');
+    await page.keyboard.press('Enter');
+    const state = await ok(s, 'readit_state');
+    expect(state.guide_tour.predictions[0].answer).toBe('一行目\n二行目');
+    expect(state.tabs.every((t) => t.dirty === false)).toBe(true);
+  });
+});
+
+test.describe('prediction inside a chaptered tour', () => {
+  test.use({ files: { 'sample.py': 'cache = {}\ndef drop():\n    cache.clear()\n', 'other.py': 'other = 1\n' } });
+  test('the reader can leave a pending prediction and skip ahead from the overview', async ({ page, readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    const steps = [
+      { ...step('guess', 2, 'def drop():'), kind: 'prediction', prompt: 'どうなると思う？' },
+      { ...step('check', 3, '    cache.clear()'), kind: 'verification', verifies: 'guess' },
+    ];
+    const overview = { title: '寿命', summary: '寿命を読む', relationships: 'drop → clear', chapters: [
+      { title: '予測', summary: '予測する', start_step: 'guess' }, { title: '確認', summary: '確かめる', start_step: 'check' }] };
+    await ok(s, 'readit_guide_load', { workspace: root, id: 'chaptered', event_sequence: 0, steps, overview });
+    await page.locator('button[data-act="chapter"][data-arg="0"]').click();
+    await expect(page.locator('button[data-act="guide-next"]')).toBeDisabled();
+    // A draft survives a visit to the overview.
+    await page.locator('#guide-prediction').fill('下書き');
+    await page.locator('#guide button[data-act="overview"]').click();
+    await expect(page.locator('#overview')).toBeVisible();
+    await page.locator('button[data-act="chapter"][data-arg="0"]').click();
+    await expect(page.locator('#guide-prediction')).toHaveValue('下書き');
+    // Opening another file is not blocked.
+    await page.locator('.tree-row', { hasText: 'other.py' }).click();
+    await expect(page.locator('.tab.selected')).toContainText('other.py');
+    let state = await ok(s, 'readit_state');
+    expect(state.guide_tour.predictions).toEqual([]);
+    // Chapters can be entered from the overview without answering.
+    await page.locator('#topbar button[data-act="overview"]').click();
+    await page.locator('button[data-act="chapter"][data-arg="1"]').click();
+    state = await ok(s, 'readit_state');
+    expect(state.guide.id).toBe('check');
+    await expect(page.locator('#guide .guide-prior')).toContainText('予測は記録されていません');
+    // An ended tour does not leave the old draft behind for the next one.
+    await ok(s, 'readit_guide_clear', { workspace: root });
+    await ok(s, 'readit_guide_load', { workspace: root, id: 'chaptered', event_sequence: (await ok(s, 'readit_state')).guide_event_sequence, steps, overview });
+    await page.locator('button[data-act="chapter"][data-arg="0"]').click();
+    await expect(page.locator('#guide-prediction')).toHaveValue('');
+  });
+});
