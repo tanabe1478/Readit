@@ -1,8 +1,8 @@
 // MCP control requests, ported from the native ui.rs control tests.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { test, expect, control, ok, lineText, repo } from './fixture.js';
+import { spawn, execFileSync } from 'node:child_process';
+import { test, expect, control, ok, lineText, repo, makeProject, startServer, openFolders } from './fixture.js';
 
 test.describe('reveal, read and user context', () => {
   test.use({ files: { 'sample.py': 'first = 1\nsecond = first + 1\n' } });
@@ -26,6 +26,98 @@ test.describe('reveal, read and user context', () => {
     expect((await control(s, 'readit_open', { workspace: root, path: 'sample.py' })).error).toMatch(/dialog/);
     await expect(page.locator('#overlay')).toBeVisible();
     expect(fs.readFileSync(path.join(readit.project, 'sample.py'), 'utf8')).toBe('first = 1\nsecond = first + 1\n');
+  });
+});
+
+test.describe('files the listing left out', () => {
+  test.use({ files: { 'listed.py': 'listed = 1\n' } });
+  test('control lists project files created after opening and still refuses unsafe paths', async ({ page, readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    // Files past the listing cap take the same path as files created after opening.
+    fs.mkdirSync(path.join(readit.project, 'later'));
+    fs.writeFileSync(path.join(readit.project, 'later/added.py'), 'added = 2\n');
+    fs.writeFileSync(path.join(readit.project, 'later/tour.py'), 'toured = 3\n');
+    fs.writeFileSync(path.join(readit.project, '.env.local'), 'SECRET=1\n');
+    fs.symlinkSync(path.join(readit.project, 'listed.py'), path.join(readit.project, 'link.py'));
+    // The tree loaded the root before `later/` existed; the control API still reads it.
+    await expect(page.locator('.tree-row[data-tree="later"]')).toHaveCount(0);
+    const read = await ok(s, 'readit_read', { workspace: root, path: 'later/added.py' });
+    expect(read.text).toBe('added = 2\n');
+    expect((await ok(s, 'readit_files', { workspace: root, filter: 'later/' })).files.map((f) => f.path)).toEqual(['later/added.py', 'later/tour.py']);
+    await ok(s, 'readit_guide_load', {
+      workspace: root, id: 'later-tour', event_sequence: 0,
+      steps: [{ id: 's1', title: '後から作ったファイル', body: '起動後に作ったファイルもツアーに使えます。', path: 'later/tour.py', line: 1, column: 1, expected_text: 'toured = 3' }],
+    });
+    expect((await ok(s, 'readit_state')).selection.text).toBe('toured = 3');
+    // Opening it reloads the stale root and opens `later/` in the tree.
+    await page.waitForFunction(() => window.readitIdle());
+    await expect(page.locator('.tree-row[data-tree="later/tour.py"]')).toBeVisible();
+    const refused = 'path is not a workspace file or a definition returned by this editor';
+    for (const p of ['.env.local', 'link.py', '../outside.py', 'later', 'missing.py', '.git/config']) {
+      expect((await control(s, 'readit_read', { workspace: root, path: p })).error, p).toBe(refused);
+    }
+    expect((await ok(s, 'readit_files', { workspace: root, filter: 'env' })).total).toBe(0);
+  });
+});
+
+test.describe('repositories inside a plain folder', () => {
+  test('a repository inside a folder lists what Git lists', async ({ page }) => {
+    const project = makeProject({
+      'notes.md': '# notes\n',
+      'app/.gitignore': 'out/\n',
+      'app/src/main.py': 'main = 1\n',
+      'app/out/generated.py': 'generated = 1\n',
+      'loose/out/kept.py': 'kept = 1\n',
+    });
+    execFileSync('git', ['-C', path.join(project, 'app'), 'init', '-q'], {
+      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }, stdio: 'ignore' });
+    const server = await startServer(project);
+    try {
+      await page.goto(server.url);
+      await page.waitForFunction(() => window.readitReady === true && window.readitIdle());
+      const root = (await ok(server.socketPath, 'readit_state')).workspace;
+      const files = (await ok(server.socketPath, 'readit_files', { workspace: root })).files.map((f) => f.path).sort();
+      // Ignored output inside the repository is left out; folders outside it are walked as before.
+      expect(files).toEqual(['app/.gitignore', 'app/src/main.py', 'loose/out/kept.py', 'notes.md']);
+      // The tree applies the same rules folder by folder.
+      await openFolders(page, 'app', 'loose');
+      await expect(page.locator('.tree-row[data-tree="app/src"]')).toBeVisible();
+      await expect(page.locator('.tree-row[data-tree="app/out"]')).toHaveCount(0);
+      await expect(page.locator('.tree-row[data-tree="loose/out"]')).toBeVisible();
+    } finally {
+      server.stop();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
+test.describe('folders load when opened', () => {
+  test.use({ files: {
+    'README.md': '# top\n',
+    'deep/a/b/c/target.py': 'target = 1\n',
+    'deep/a/sibling.py': 'sibling = 1\n',
+    'wide/one.py': 'one = 1\n',
+  } });
+  test('the tree starts closed, loads opened folders and reveals files opened elsewhere', async ({ page }) => {
+    // Only the top folder is listed at first.
+    await expect(page.locator('.tree-row')).toHaveCount(3);
+    await expect(page.locator('.tree-row[data-tree="deep/a"]')).toHaveCount(0);
+    await openFolders(page, 'deep');
+    await expect(page.locator('.tree-row[data-tree="deep/a"]')).toBeVisible();
+    await expect(page.locator('.tree-row[data-tree="deep/a/sibling.py"]')).toHaveCount(0);
+    // Quick open searches the whole project, not just the folders opened so far.
+    await page.keyboard.press('Meta+p');
+    await page.keyboard.type('target');
+    await page.waitForFunction(() => window.readitIdle());
+    await expect(page.locator('.pick').first()).toContainText('deep/a/b/c/target.py');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.tab.selected')).toContainText('target.py');
+    await page.waitForFunction(() => window.readitIdle());
+    // Opening a file opens the folders above it, like an editor revealing the active file.
+    await expect(page.locator('.tree-row[data-tree="deep/a/b/c/target.py"]')).toBeVisible();
+    await expect(page.locator('.tree-row[data-tree="deep/a/sibling.py"]')).toBeVisible();
+    await expect(page.locator('.tree-row[data-tree="wide/one.py"]')).toHaveCount(0);
   });
 });
 

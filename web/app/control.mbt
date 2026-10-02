@@ -193,43 +193,56 @@ fn control_call(
     reply(Err("workspace changed or does not match; call readit_state first"))
     return
   }
-  // Load unopened texts the request refers to, then run it synchronously.
-  let paths = match op {
+  // List files the request names that the listing left out, load unopened
+  // texts, then run it synchronously.
+  let named = match op {
     "readit_read" | "readit_open" | "readit_pin" =>
       match json_text(args, "path") {
-        Some(p) => {
-          let key = control_path(p) catch { _ => "" }
-          if key == "" {
-            []
-          } else {
-            [key]
-          }
-        }
+        Some(p) => [p]
         None => []
       }
-    "readit_guide_show" | "readit_guide_load" | "readit_guide_revise" => {
-      let own = step_paths(args)
-      if reader.tour is Some(t) {
-        for g in t.steps {
-          own.push(g.path)
-        }
-      }
-      own
-    }
+    "readit_guide_show" | "readit_guide_load" | "readit_guide_revise" =>
+      step_raw_paths(args)
     _ => []
   }
-  load_texts(paths, () => {
-    let result : Result[Json, String] = try
-      control_sync(op, args, reply)
-    catch {
-      Failure(m) => Err(@core.failure_text(m))
-    } noraise {
-      value => value
+  admit_paths(named, () => {
+    let paths = match op {
+      "readit_read" | "readit_open" | "readit_pin" =>
+        match json_text(args, "path") {
+          Some(p) => {
+            let key = control_path(p) catch { _ => "" }
+            if key == "" {
+              []
+            } else {
+              [key]
+            }
+          }
+          None => []
+        }
+      "readit_guide_show" | "readit_guide_load" | "readit_guide_revise" => {
+        let own = step_paths(args)
+        if reader.tour is Some(t) {
+          for g in t.steps {
+            own.push(g.path)
+          }
+        }
+        own
+      }
+      _ => []
     }
-    match result {
-      Ok(Null) => ()
-      other => reply(other)
-    }
+    load_texts(paths, () => {
+      let result : Result[Json, String] = try
+        control_sync(op, args, reply)
+      catch {
+        Failure(m) => Err(@core.failure_text(m))
+      } noraise {
+        value => value
+      }
+      match result {
+        Ok(Null) => ()
+        other => reply(other)
+      }
+    })
   })
 }
 
@@ -461,35 +474,53 @@ fn control_sync(
       Ok(control_state())
     }
     "readit_files" => {
-      let filter = @core.lower(json_text(args, "filter").unwrap_or(""))
+      let filter = json_text(args, "filter").unwrap_or("")
       let offset = json_int(args, "offset").unwrap_or(0)
       let limit = positive(args, "limit", 200).min(500)
-      let files = reader.workspace.files.filter(path => {
-        !reader.external.contains(path) &&
-        !reader.untitled.contains(path) &&
-        @core.contains(@core.lower(path), filter)
-      })
-      let page = []
-      for i in offset..<(offset + limit).min(files.length()) {
-        let path = files[i]
-        page.push(
-          (
-            {
-              "path": path,
-              "dirty": is_dirty(path),
-              "language": @core.language(path),
-            } : Json),
-        )
-      }
-      Ok({
-        "total": num(files.length()),
-        "files": Json::array(page),
-        "next_offset": if offset + limit < files.length() {
-          num(offset + limit)
-        } else {
-          Json::null()
+      // The server keeps the project index; the browser only knows open folders.
+      rpc(
+        "files.list",
+        {
+          "root": reader.workspace.root,
+          "filter": filter,
+          "offset": num(offset),
+          "limit": num(limit),
         },
-      })
+        result => {
+          match result {
+            Ok({ "files": Array(items), "total": Number(total, ..), .. }) => {
+              let page = items.filter_map(item => {
+                match item {
+                  String(path) =>
+                    Some(
+                      (
+                        {
+                          "path": path,
+                          "dirty": is_dirty(path),
+                          "language": @core.language(path),
+                        } : Json),
+                    )
+                  _ => None
+                }
+              })
+              reply(
+                Ok({
+                  "total": num(total.to_int()),
+                  "files": Json::array(page),
+                  "next_offset": if offset + limit < total.to_int() {
+                    num(offset + limit)
+                  } else {
+                    Json::null()
+                  },
+                }),
+              )
+            }
+            Ok(_) => reply(Err("invalid file listing"))
+            Err(e) => reply(Err(e))
+          }
+        },
+      )
+      Ok(Json::null())
     }
     "readit_read" => {
       let path = control_path(json_text(args, "path").unwrap_or(""))

@@ -6,6 +6,8 @@ import {
 }
 
 // Values
+pub fn ancestors(String) -> Array[String]
+
 pub fn base_name(String) -> String
 
 pub fn char_at(String, Int) -> Char?
@@ -29,6 +31,8 @@ pub fn failure_text(String) -> String
 pub fn find_all(String, String) -> Array[Int]
 
 pub fn find_from(String, String, Int) -> Int
+
+pub fn fuzzy_paths(Array[String], Array[String], String, Int) -> (Array[String], Int)
 
 pub fn is_symbol_char(Char) -> Bool
 
@@ -88,7 +92,7 @@ pub fn symbol_range(String, Int) -> (Int, Int)?
 
 pub fn take_chars(String, Int) -> String
 
-pub fn tree_entries(Array[String], Array[String], Map[String, Unit]) -> Array[TreeEntry]
+pub fn tree_entries(Map[String, Array[TreeChild]], Map[String, Unit]) -> Array[TreeEntry]
 
 pub fn trim(String) -> String
 
@@ -119,11 +123,16 @@ pub(all) struct Position {
   character : Int
 } derive(Eq, @debug.Debug)
 
+pub(all) struct TreeChild {
+  name : String
+  dir : Bool
+} derive(@debug.Debug)
+
 pub(all) struct TreeEntry {
   path : String
   name : String
   depth : Int
-  file : Int?
+  folder : Bool
 } derive(@debug.Debug)
 
 // Type aliases

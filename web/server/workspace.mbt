@@ -5,13 +5,18 @@
 let max_bytes : Int = 256 * 1024
 
 ///|
-let max_files : Int = 5000
+/// Cap of the server-side file index used by quick open and project search.
+/// The browser never receives the whole index; folders load as they open.
+let max_files : Int = 50000
 
 ///|
 pub struct Workspace {
   root : String
   git : Bool
-  files : Array[String]
+  /// Every listed file, built on first use and dropped when files change.
+  mut index : Array[String]?
+  /// The index in lowercase, for quick open.
+  mut lowered : Array[String]?
   changed : Map[String, Unit]
   warnings : Array[String]
   mut session : Json
@@ -180,7 +185,13 @@ fn walk(
     }
     match kind {
       "symlink" => warnings.push("リンクを除外: \{rel}")
-      "dir" => walk(root, rel, paths, warnings, depth + 1)
+      "dir" =>
+        // A repository inside the folder lists what Git lists, so its
+        // ignored build output does not crowd out the sources.
+        if lstat_kind(path_join(root, rel + "/.git")) == "" ||
+          !git_listing(root, rel, paths, warnings) {
+          walk(root, rel, paths, warnings, depth + 1)
+        }
       "file" => paths.push(rel)
       _ => ()
     }
@@ -189,6 +200,48 @@ fn walk(
       break
     }
   }
+}
+
+///|
+/// Paths Git tracks or would track under `at`, relative to `root`.
+fn git_files(
+  root : String,
+  at : String,
+  warnings : Array[String],
+) -> Array[String] raise Failure {
+  let bytes = git_output(path_join(root, at), [
+    "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+  ])
+  let out = []
+  for piece in bytes.split("\u{0}") {
+    let raw = piece.to_owned()
+    if raw == "" {
+      continue
+    }
+    match decode_utf8(raw) {
+      Some(path) => out.push(join_relative(at, path))
+      None => warnings.push("UTF-8でないファイル名を除外")
+    }
+  }
+  out
+}
+
+///|
+/// List a repository found while walking a folder. False when Git cannot.
+fn git_listing(
+  root : String,
+  at : String,
+  paths : Array[String],
+  warnings : Array[String],
+) -> Bool {
+  let found = git_files(root, at, warnings) catch { _ => return false }
+  for p in found {
+    if paths.length() >= max_files {
+      break
+    }
+    paths.push(p)
+  }
+  true
 }
 
 ///|
@@ -217,47 +270,6 @@ pub fn Workspace::load(root : String) -> Workspace raise Failure {
       "Git差分はリポジトリのルートを指定した場合のみ表示します",
     )
   }
-  let paths = if git {
-    let bytes = git_output(root, [
-      "ls-files", "-z", "--cached", "--others", "--exclude-standard",
-    ])
-    let out = []
-    for piece in bytes.split("\u{0}") {
-      let raw = piece.to_owned()
-      if raw == "" {
-        continue
-      }
-      match decode_utf8(raw) {
-        Some(path) => out.push(path)
-        None => warnings.push("UTF-8でないファイル名を除外")
-      }
-    }
-    out
-  } else {
-    let out = []
-    walk(root, "", out, warnings, 0)
-    out
-  }
-  let kept = paths.filter(p => !skipped(p))
-  @core.sort_strings(kept)
-  let unique = []
-  for p in kept {
-    if unique.last() != Some(p) {
-      unique.push(p)
-    }
-  }
-  @core.sort_reading_order(unique)
-  let files = if unique.length() > max_files {
-    warnings.push(
-      "\{unique.length()}ファイル中、先頭\{max_files}件を表示",
-    )
-    unique[0:max_files].to_owned()
-  } else {
-    unique
-  }
-  // Listing is all the project costs at startup; each file is read when opened.
-  // Git lists paths deleted in the working tree; they cannot be edited.
-  let files = files.filter(p => lstat_kind(path_join(root, p)) == "file")
   let changed = if git { changed_paths(root) } else { Map([]) }
   let session_file = path_join(root, ".readit/session.json")
   let session = if lstat_kind(session_file) != "" {
@@ -284,7 +296,174 @@ pub fn Workspace::load(root : String) -> Workspace raise Failure {
   } else {
     empty_session()
   }
-  { root, git, files, changed, warnings, session, }
+  { root, git, index: None, lowered: None, changed, warnings, session, }
+}
+
+///|
+/// Every file the project lists, in reading order. Built on first use: opening
+/// a project costs only its top folder.
+pub fn Workspace::files(self : Workspace) -> Array[String] {
+  if self.index is Some(files) {
+    return files
+  }
+  let paths = if self.git {
+    git_files(self.root, "", self.warnings) catch {
+      e => {
+        self.warnings.push("Gitの一覧を読めません: \{e}")
+        []
+      }
+    }
+  } else {
+    let out = []
+    walk(self.root, "", out, self.warnings, 0) catch {
+      e => self.warnings.push("一覧を読めません: \{e}")
+    }
+    out
+  }
+  let kept = paths.filter(p => !skipped(p))
+  @core.sort_strings(kept)
+  let unique = []
+  for p in kept {
+    if unique.last() != Some(p) {
+      unique.push(p)
+    }
+  }
+  @core.sort_reading_order(unique)
+  let files = if unique.length() > max_files {
+    self.warnings.push(
+      "\{unique.length()}ファイル中、先頭\{max_files}件を検索対象にしました",
+    )
+    unique[0:max_files].to_owned()
+  } else {
+    unique
+  }
+  // Git lists paths deleted in the working tree; they cannot be edited.
+  let files = files.filter(p => lstat_kind(path_join(self.root, p)) == "file")
+  self.index = Some(files)
+  files
+}
+
+///|
+/// Forget the index after files are created, moved or deleted.
+fn Workspace::invalidate(self : Workspace) -> Unit {
+  self.index = None
+  self.lowered = None
+}
+
+///|
+/// The index in lowercase, in the same order.
+pub fn Workspace::lowered(self : Workspace) -> Array[String] {
+  let files = self.files()
+  match self.lowered {
+    Some(l) => l
+    None => {
+      let l = files.map(@core.lower)
+      self.lowered = Some(l)
+      l
+    }
+  }
+}
+
+///|
+/// Direct children of a folder, without skipped names, links or what Git
+/// ignores there. `relative` is "" for the root.
+pub fn Workspace::children(
+  self : Workspace,
+  relative : String,
+) -> Array[@core.TreeChild] raise Failure {
+  let dir = if relative == "" {
+    self.root
+  } else {
+    safe_path(self.root, relative)
+  }
+  if stat_kind(dir) != "dir" {
+    fail("フォルダではありません")
+  }
+  let entries = read_dir(dir) catch {
+    e => {
+      node_fail(e)
+      []
+    }
+  }
+  let out : Array[@core.TreeChild] = []
+  for entry in entries {
+    let (name, kind) = entry
+    if skipped(join_relative(relative, name)) {
+      continue
+    }
+    match kind {
+      "dir" => out.push({ name, dir: true, })
+      "file" => out.push({ name, dir: false, })
+      _ => ()
+    }
+  }
+  let ignored = git_ignored(dir, out.map(c => c.name))
+  out.filter(c => !ignored.contains(c.name))
+}
+
+///|
+/// Names in `dir` that Git ignores. Git finds the repository from `dir`, so a
+/// repository nested in a plain folder applies its own rules. Tracked files are
+/// never reported. Outside a repository nothing is ignored.
+fn git_ignored(dir : String, names : Array[String]) -> Map[String, Unit] {
+  let out : Map[String, Unit] = Map([])
+  if names.length() == 0 {
+    return out
+  }
+  // -z needs --stdin, which `run` cannot feed. One name per line instead; Git
+  // still quotes names with a newline, quote or backslash, and those are shown.
+  let result = run(
+    "git",
+    ["-C", dir, "-c", "core.quotepath=off", "check-ignore", "--", ..names],
+  ) catch {
+    _ => return out
+  }
+  // 0: some ignored, 1: none ignored, anything else: not a repository.
+  if result.status != 0 {
+    return out
+  }
+  for piece in result.stdout.split("\n") {
+    match decode_utf8(piece.to_owned()) {
+      Some(name) if name != "" => out[name] = ()
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// The file to show first: the earliest file in reading order among the
+/// shallowest files. Folders are read level by level, so a large project is
+/// not walked when its top folder already has files.
+pub fn Workspace::first_file(self : Workspace) -> String? {
+  let mut level = [""]
+  let mut visited = 0
+  for depth = 0; depth < 4 && level.length() > 0; depth = depth + 1 {
+    let files = []
+    let next = []
+    for folder in level {
+      visited += 1
+      if visited > 200 {
+        break
+      }
+      let children = self.children(folder) catch { _ => [] }
+      for c in children {
+        let path = join_relative(folder, c.name)
+        if c.dir {
+          next.push(path)
+        } else {
+          files.push(path)
+        }
+      }
+    }
+    if files.length() > 0 {
+      @core.sort_reading_order(files)
+      return files.get(0)
+    }
+    @core.sort_strings(next)
+    level = next
+  }
+  None
 }
 
 ///|
@@ -293,42 +472,29 @@ fn empty_session() -> Json {
 }
 
 ///|
-pub fn Workspace::lists(self : Workspace, path : String) -> Bool {
-  self.files.contains(path)
+fn Workspace::track(self : Workspace, relative : String) -> Unit {
+  guard self.index is Some(files) else { return }
+  if !files.contains(relative) {
+    files.push(relative)
+    @core.sort_reading_order(files)
+    self.lowered = None
+  }
 }
 
 ///|
-fn Workspace::track(self : Workspace, relative : String) -> Bool {
-  if self.files.contains(relative) {
-    return false
-  }
-  self.files.push(relative)
-  @core.sort_reading_order(self.files)
-  true
-}
-
-///|
-/// Folders for the tree, including empty ones.
-pub fn Workspace::directories(self : Workspace) -> Array[String] {
-  let out = []
-  fn visit(at : String, depth : Int) {
-    if depth > 12 || out.length() >= 2000 {
-      return
+/// The paths that name regular project files the listing would show: inside
+/// the root, not through a link, not in a skipped folder.
+pub fn Workspace::check(
+  self : Workspace,
+  paths : Array[String],
+) -> Array[String] {
+  paths.filter(relative => {
+    if skipped(relative) {
+      return false
     }
-    let entries = read_dir(path_join(self.root, at)) catch { _ => return }
-    for entry in entries {
-      let (name, kind) = entry
-      let rel = join_relative(at, name)
-      if skipped(rel) || kind != "dir" {
-        continue
-      }
-      out.push(rel)
-      visit(rel, depth + 1)
-    }
-  }
-
-  visit("", 0)
-  out
+    let full = safe_path(self.root, relative) catch { _ => return false }
+    stat_kind(full) == "file"
+  })
 }
 
 ///|
@@ -366,7 +532,7 @@ pub fn Workspace::create_file(
   create_new(path, text) catch {
     e => node_fail(e)
   }
-  ignore(self.track(relative))
+  self.track(relative)
 }
 
 ///|
@@ -416,10 +582,7 @@ pub fn Workspace::rename(
       }
     }
   }
-  for i, p in self.files {
-    self.files[i] = @core.remap_path(p, from, to)
-  }
-  @core.sort_reading_order(self.files)
+  self.invalidate()
   let changed = self.changed.keys().collect()
   self.changed.clear()
   for p in changed {
@@ -524,11 +687,7 @@ pub fn Workspace::delete(
   rename(src, path_join(dir, "content")) catch {
     e => node_fail(e)
   }
-  let kept = self.files.filter(p => !@core.within(p, relative))
-  self.files.clear()
-  for p in kept {
-    self.files.push(p)
-  }
+  self.invalidate()
 }
 
 ///|
@@ -560,11 +719,7 @@ pub fn Workspace::restore_last(self : Workspace) -> String raise Failure {
       rename(source, dest) catch {
         e => node_fail(e)
       }
-      let paths = []
-      walk(self.root, path, paths, self.warnings, 0)
-      for p in paths {
-        ignore(self.track(p))
-      }
+      self.invalidate()
     } else {
       hard_link(source, dest) catch {
         e => node_fail(e)
@@ -577,7 +732,7 @@ pub fn Workspace::restore_last(self : Workspace) -> String raise Failure {
           node_fail(e)
         }
       }
-      ignore(self.track(path))
+      self.track(path)
     }
     return path
   }
@@ -607,7 +762,7 @@ pub fn Workspace::persist(self : Workspace) -> Unit raise Failure {
 pub fn Workspace::read(
   self : Workspace,
   relative : String,
-) -> (String, String?, Bool) raise Failure {
+) -> (String, String?) raise Failure {
   let path = safe_path(self.root, relative)
   if stat_kind(path) != "file" {
     fail("ファイルではありません")
@@ -639,8 +794,8 @@ pub fn Workspace::read(
   } else {
     Some(text)
   }
-  let added = self.track(relative)
-  (text, before, added)
+  self.track(relative)
+  (text, before)
 }
 
 ///|
@@ -699,7 +854,7 @@ pub fn Workspace::scan(
   overlays : Map[String, String],
   visit : (String, String) -> Bool,
 ) -> Unit {
-  for path in self.files {
+  for path in self.files() {
     let text = match overlays.get(path) {
       Some(t) => t
       None => {
@@ -726,9 +881,7 @@ pub fn Workspace::summary(self : Workspace) -> Json {
   {
     "root": self.root,
     "git": self.git,
-    "files": Json::array(self.files.map(Json::string)),
     "changed": Json::array(self.changed.keys().map(Json::string).collect()),
-    "directories": Json::array(self.directories().map(Json::string)),
     "warnings": Json::array(self.warnings.map(Json::string)),
   }
 }

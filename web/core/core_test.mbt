@@ -64,23 +64,46 @@ test "removed lines have no edit target" {
 
 ///|
 test "empty directories are visible and collapsible" {
-  let dirs = ["src", "src/empty"]
-  assert_eq(@core.tree_entries([], dirs, Map([])).length(), 2)
-  assert_eq(@core.tree_entries([], dirs, Map([("src", ())])).length(), 1)
+  let listed : Map[String, Array[@core.TreeChild]] = Map([
+    ("", [{ name: "src", dir: true, }]),
+    ("src", [{ name: "empty", dir: true, }]),
+    ("src/empty", []),
+  ])
+  assert_eq(@core.tree_entries(listed, Map([("src", ())])).length(), 2)
+  assert_eq(@core.tree_entries(listed, Map([])).length(), 1)
 }
 
 ///|
-test "preserves hierarchy, sorts folders first and collapses descendants" {
-  let paths = ["z.rs", "src/nested/b.rs", "src/a.rs", "README.md"]
-  let open = @core.tree_entries(paths, [], Map([]))
+test "preserves hierarchy, sorts folders first and shows only expanded folders" {
+  let listed : Map[String, Array[@core.TreeChild]] = Map([
+    (
+      "",
+      [
+        { name: "z.rs", dir: false, },
+        { name: "src", dir: true, },
+        { name: "README.md", dir: false, },
+      ],
+    ),
+    ("src", [{ name: "a.rs", dir: false, }, { name: "nested", dir: true, }]),
+    ("src/nested", [{ name: "b.rs", dir: false, }]),
+  ])
+  let open = @core.tree_entries(listed, Map([("src", ()), ("src/nested", ())]))
   assert_eq(open.map(e => e.path), [
     "src", "src/nested", "src/nested/b.rs", "src/a.rs", "README.md", "z.rs",
   ])
   assert_eq(open[2].depth, 2)
-  assert_eq(open[2].file, Some(1))
-  let closed = @core.tree_entries(paths, [], Map([("src", ())]))
-  assert_eq(closed.length(), 3)
-  assert_eq(closed[0].file, None)
+  assert_eq(open[2].folder, false)
+  // Folders start closed; an expanded folder not loaded yet shows nothing.
+  let closed = @core.tree_entries(listed, Map([]))
+  assert_eq(closed.map(e => e.path), ["src", "README.md", "z.rs"])
+  assert_eq(closed[0].folder, true)
+  let pending = @core.tree_entries(
+    listed,
+    Map([("src", ()), ("src/other", ())]),
+  )
+  assert_eq(pending.length(), 5)
+  assert_eq(@core.ancestors("src/nested/b.rs"), ["src", "src/nested"])
+  assert_eq(@core.ancestors("top.rs"), [])
 }
 
 ///|

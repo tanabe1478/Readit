@@ -90,9 +90,7 @@ fn ensure(path : String, done : (Result[Unit, String]) -> Unit) -> Unit {
         if reader.workspace.index_of(path) is None {
           reader.workspace.documents.push(new_document(path, text, before))
         }
-        if value is Object(o) && o.get("workspace") is Some(summary) {
-          reader.workspace.apply(summary)
-        }
+        reader.workspace.known_files[path] = ()
         done(Ok(()))
       }
     }
@@ -134,6 +132,7 @@ fn open(
     }
     reader.selected = Some(path)
     reader.tree_target = Some(path)
+    reveal_in_tree(path)
     reader.compare = false
     reader.search_key = ""
     guard reader.workspace.document(path) is Some(doc) else { return }
@@ -191,6 +190,10 @@ fn show(dialog : Dialog, initial : String) -> Unit {
   ]
   if dialog == WorkspaceSearch && initial != "" {
     schedule_workspace_search()
+  }
+  if dialog == Quick {
+    reader.quick_picks = []
+    find_files()
   }
 }
 
@@ -416,6 +419,12 @@ fn finish_pending() -> Unit {
           match result {
             Ok(summary) => {
               reader.workspace.apply(summary)
+              refresh_tree()
+              for p in reader.workspace.known_files.keys().collect() {
+                if @core.within(p, path) {
+                  reader.workspace.known_files.remove(p)
+                }
+              }
               for tab in reader.tabs.copy() {
                 if @core.within(tab, path) {
                   close_now(tab)
@@ -468,7 +477,11 @@ fn reset_for_workspace() -> Unit {
   reader.closed.clear()
   reader.history.clear()
   reader.history_index = 0
-  reader.collapsed.clear()
+  reader.expanded.clear()
+  reader.workspace.listed.clear()
+  reader.workspace.loading.clear()
+  reader.workspace.known_files.clear()
+  reader.quick_picks = []
   reader.tree_target = None
   reader.compare = false
   reader.disk_cache.clear()
@@ -514,10 +527,9 @@ fn load_workspace(root : String, file : String?) -> Unit {
     match result {
       Err(e) => say(e)
       Ok(summary) => {
-        let files = strings(json_field(summary, "files"))
         let first = match file {
           Some(f) => Some(f)
-          None => files.get(0)
+          None => json_text(summary, "first")
         }
         let new_root = json_text(summary, "root").unwrap_or(root)
         fetch_files(new_root, first.map(p => [p]).unwrap_or([]), texts => {
@@ -527,9 +539,7 @@ fn load_workspace(root : String, file : String?) -> Unit {
             reader.workspace.documents.push(new_document(path, text, before))
             open(path, None, true)
           }
-          say(
-            "\{reader.workspace.root} · \{reader.workspace.files.length()}件のファイル",
-          )
+          say(reader.workspace.root)
         })
       }
     }
@@ -551,8 +561,10 @@ fn reload_workspace() -> Unit {
     match result {
       Err(e) => say(e)
       Ok(summary) => {
-        let files = strings(json_field(summary, "files"))
-        let known = tabs.filter(p => files.contains(p))
+        // Tabs whose files are gone fail to read and are dropped.
+        let known = tabs.filter(p => {
+          !reader.untitled.contains(p) && !reader.external.contains(p)
+        })
         fetch_files(root, known, texts => {
           if reader.workspace.root != root {
             return

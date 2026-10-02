@@ -398,19 +398,19 @@ fn explorer_key(desc : String) -> Bool {
         entries[(index + 1).min(entries.length() - 1)].path,
       )
     "left" =>
-      if target.file is None {
-        reader.collapsed[target.path] = ()
+      if target.folder {
+        reader.expanded.remove(target.path)
       } else if @core.parent_of(target.path) != "" {
         reader.tree_target = Some(@core.parent_of(target.path))
       }
-    "right" => if target.file is None { reader.collapsed.remove(target.path) }
+    "right" => if target.folder { reader.expanded[target.path] = () }
     "enter" =>
-      if target.file is Some(_) {
+      if !target.folder {
         open(target.path, None, true)
-      } else if reader.collapsed.contains(target.path) {
-        reader.collapsed.remove(target.path)
+      } else if reader.expanded.contains(target.path) {
+        reader.expanded.remove(target.path)
       } else {
-        reader.collapsed[target.path] = ()
+        reader.expanded[target.path] = ()
       }
     _ => return false
   }

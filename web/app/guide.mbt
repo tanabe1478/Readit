@@ -41,16 +41,8 @@ fn json_field(args : Json, key : String) -> Json? {
 /// Resolve a control path: a project file, or a definition this editor returned.
 fn control_path(value : String) -> String raise Failure {
   let root = reader.workspace.root
-  let absolute = if @core.starts_with(value, "/") {
-    value
-  } else {
-    root + "/" + value
-  }
-  let key = if @core.starts_with(absolute, root + "/") {
-    @core.slice(absolute, root.length() + 1, absolute.length())
-  } else {
-    absolute
-  }
+  let absolute = reader.workspace.absolute(value)
+  let key = control_key(value)
   if reader.workspace.known(key) {
     return key
   }
@@ -59,6 +51,18 @@ fn control_path(value : String) -> String raise Failure {
     return absolute
   }
   fail("path is not a workspace file or a definition returned by this editor")
+}
+
+///|
+/// A control path relative to the root when it lies inside, else absolute.
+fn control_key(value : String) -> String {
+  let root = reader.workspace.root
+  let absolute = reader.workspace.absolute(value)
+  if @core.starts_with(absolute, root + "/") {
+    @core.slice(absolute, root.length() + 1, absolute.length())
+  } else {
+    absolute
+  }
 }
 
 ///|
@@ -166,11 +170,19 @@ fn prepare_guide(args : Json, in_tour? : Bool = true) -> Guide raise Failure {
 
 ///|
 fn step_paths(args : Json) -> Array[String] {
+  step_raw_paths(args).filter_map(p => {
+    let key = control_path(p) catch { _ => return None }
+    Some(key)
+  })
+}
+
+///|
+/// Paths of steps and evidence as the request wrote them.
+fn step_raw_paths(args : Json) -> Array[String] {
   let out = []
   let add = (value : Json) => {
     if json_text(value, "path") is Some(p) {
-      let key = control_path(p) catch { _ => return }
-      out.push(key)
+      out.push(p)
     }
   }
   match json_field(args, "steps") {

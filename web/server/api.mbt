@@ -51,8 +51,34 @@ fn Server::scope(self : Server, args : Json) -> Workspace raise Failure {
 ///|
 fn Server::summary(self : Server) -> Json {
   match self.workspace {
-    Some(ws) => ws.summary()
+    Some(ws) => opening(ws)
     None => Json::null()
+  }
+}
+
+///|
+/// The summary a newly opened project starts from, with the file to show first.
+fn opening(ws : Workspace) -> Json {
+  guard ws.summary() is Object(o) else { return ws.summary() }
+  let out = o.copy()
+  out["first"] = match ws.first_file() {
+    Some(p) => Json::string(p)
+    None => Json::null()
+  }
+  Json::object(out)
+}
+
+///|
+fn strings_arg(args : Json, key : String) -> Array[String] {
+  match field(args, key) {
+    Some(Array(items)) =>
+      items.filter_map(item => {
+        match item {
+          String(p) => Some(p)
+          _ => None
+        }
+      })
+    _ => []
   }
 }
 
@@ -101,29 +127,73 @@ fn Server::dispatch(
       let ws = Workspace::load(absolute)
       self.workspace = Some(ws)
       self.service.shutdown()
-      Some(ws.summary())
+      Some(opening(ws))
     }
     "workspace.reload" => {
       let ws = self.scope(args)
       let fresh = Workspace::load(ws.root)
       self.workspace = Some(fresh)
-      Some(fresh.summary())
+      Some(opening(fresh))
     }
     "file.read" => {
       let ws = self.scope(args)
-      let (text, before, added) = ws.read(text_arg(args, "path"))
-      let out : Map[String, Json] = {
+      let (text, before) = ws.read(text_arg(args, "path"))
+      Some({
         "text": Json::string(text),
         "before": match before {
           Some(b) => Json::string(b)
           None => Json::null()
         },
+      })
+    }
+    "dir.list" => {
+      let ws = self.scope(args)
+      let path = match field(args, "path") {
+        Some(String(p)) => p
+        _ => ""
       }
-      // The listing only changes when the file was not listed before.
-      if added {
-        out["workspace"] = ws.summary()
+      let entries = ws
+        .children(path)
+        .map(c => ({ "name": c.name, "dir": c.dir } : Json))
+      Some({ "path": path, "entries": Json::array(entries) })
+    }
+    "files.find" => {
+      let ws = self.scope(args)
+      let query = @core.lower(@core.trim(text_arg(args, "query")))
+      let (found, total) = @core.fuzzy_paths(
+        ws.files(),
+        ws.lowered(),
+        query,
+        int_arg(args, "limit", 80),
+      )
+      Some({ "files": Json::array(found.map(Json::string)), "total": total })
+    }
+    "files.list" => {
+      let ws = self.scope(args)
+      let filter = match field(args, "filter") {
+        Some(String(f)) => @core.lower(f)
+        _ => ""
       }
-      Some(Json::object(out))
+      let offset = int_arg(args, "offset", 0)
+      let limit = int_arg(args, "limit", 200)
+      let files = ws.files().filter(p => @core.contains(@core.lower(p), filter))
+      let end = (offset + limit).min(files.length())
+      Some({
+        "files": Json::array(
+          (if offset < end { files[offset:end].to_owned() } else { [] }).map(
+            Json::string,
+          ),
+        ),
+        "total": files.length(),
+      })
+    }
+    "file.check" => {
+      let ws = self.scope(args)
+      Some({
+        "files": Json::array(
+          ws.check(strings_arg(args, "paths")).map(Json::string),
+        ),
+      })
     }
     "file.save" => {
       let ws = self.scope(args)
@@ -168,7 +238,11 @@ fn Server::dispatch(
     "file.restore" => {
       let ws = self.scope(args)
       let path = ws.restore_last()
-      Some({ "path": path, "workspace": ws.summary() })
+      Some({
+        "path": path,
+        "file": stat_kind(path_join(ws.root, path)) == "file",
+        "workspace": ws.summary(),
+      })
     }
     "file.disk" => {
       let ws = self.scope(args)

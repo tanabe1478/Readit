@@ -179,35 +179,8 @@ fn render_menu() -> String {
 }
 
 ///|
-fn tree_paths() -> Array[String] {
-  let paths = reader.workspace.files.copy()
-  for d in reader.workspace.documents {
-    if !reader.workspace.lists(d.path) {
-      paths.push(d.path)
-    }
-  }
-  paths.filter(p => !reader.untitled.contains(p) && !reader.external.contains(p))
-}
-
-///|
-let tree_cache : Ref[(String, Array[@core.TreeEntry])] = Ref(("", []))
-
-///|
 fn tree_entries() -> Array[@core.TreeEntry] {
-  // Rebuilding every redraw costs milliseconds once a project has thousands of
-  // files, so the result is kept until one of its inputs changes.
-  let paths = tree_paths()
-  let key = "\{paths.length()}|\{paths.join("\n")}|\{reader.collapsed.keys().collect().join("\n")}|\{reader.workspace.directories.join("\n")}"
-  if tree_cache.val.0 == key {
-    return tree_cache.val.1
-  }
-  let entries = @core.tree_entries(
-    paths,
-    reader.workspace.directories,
-    reader.collapsed,
-  )
-  tree_cache.val = (key, entries)
-  entries
+  @core.tree_entries(reader.workspace.listed, reader.expanded)
 }
 
 ///|
@@ -230,7 +203,7 @@ fn render_tree() -> String {
   )
   for i in first..<last {
     let entry = entries[i]
-    let folder = entry.file is None
+    let folder = entry.folder
     let active = reader.tree_target == Some(entry.path)
     let badge = if is_dirty(entry.path) {
       "●"
@@ -243,10 +216,10 @@ fn render_tree() -> String {
       ""
     }
     let icon = if folder {
-      if reader.collapsed.contains(entry.path) {
-        "›"
-      } else {
+      if reader.expanded.contains(entry.path) {
         "⌄"
+      } else {
+        "›"
       }
     } else {
       match @core.language(entry.path) {

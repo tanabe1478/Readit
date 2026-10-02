@@ -56,7 +56,7 @@ pub fn boot(config : String) -> Unit {
         js_log(w)
       }
       // Show the first file unless the user already opened something meanwhile.
-      match reader.workspace.files.get(0) {
+      match reader.workspace.first {
         Some(path) =>
           ensure(path, _ => {
             if reader.selected is None {
@@ -220,6 +220,8 @@ fn handle_event(kind : String, args : Json) -> Bool {
           reader.pick_index = 0
           if reader.dialog == Some(WorkspaceSearch) {
             schedule_workspace_search()
+          } else if reader.dialog == Some(Quick) {
+            find_files()
           }
         }
         "search-input" => {
@@ -330,13 +332,12 @@ fn on_action(act : String, arg : String) -> Unit {
     "tree" => {
       reader.context_menu = None
       reader.tree_target = Some(arg)
-      let folder = !reader.workspace.known(arg)
-      if folder {
+      if reader.workspace.is_folder(arg) {
         reader.focus = "explorer"
-        if reader.collapsed.contains(arg) {
-          reader.collapsed.remove(arg)
+        if reader.expanded.contains(arg) {
+          reader.expanded.remove(arg)
         } else {
-          reader.collapsed[arg] = ()
+          reader.expanded[arg] = ()
         }
       } else {
         open(arg, None, true)
@@ -562,6 +563,7 @@ fn render() -> Unit {
     reader.pinned = None
   }
   refresh_search()
+  ensure_tree()
   let overlay = dialog_open()
   js_set_title(
     {

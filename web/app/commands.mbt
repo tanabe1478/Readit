@@ -71,51 +71,7 @@ fn picks() -> Array[Pick] {
           target: Some(i),
         }
       })
-    Some(Quick) => {
-      let found = []
-      for file in reader.workspace.files {
-        let path = @core.lower(file)
-        let mut at = 0
-        let mut ok = true
-        for c in q {
-          let needle = String::make(1, c)
-          let next = @core.find_from(path, needle, at)
-          if next < 0 {
-            ok = false
-            break
-          }
-          at = next + needle.length()
-        }
-        if ok {
-          found.push({
-            label: file,
-            detail: if is_dirty(file) {
-              "未保存"
-            } else {
-              ""
-            },
-            path: Some(file),
-            line: None,
-            command: None,
-            target: None,
-          })
-        }
-      }
-      found.sort_by((a, b) => {
-        let ca = if @core.contains(@core.lower(a.label), q) { 0 } else { 1 }
-        let cb = if @core.contains(@core.lower(b.label), q) { 0 } else { 1 }
-        if ca != cb {
-          ca - cb
-        } else {
-          a.label.length() - b.label.length()
-        }
-      })
-      if found.length() > 80 {
-        found[0:80].to_owned()
-      } else {
-        found
-      }
-    }
+    Some(Quick) => reader.quick_picks
     Some(Commands) =>
       commands
       .filter(c => {
@@ -136,6 +92,46 @@ fn picks() -> Array[Pick] {
     Some(WorkspaceSearch) => if q == "" { [] } else { reader.workspace_picks }
     _ => []
   }
+}
+
+///|
+/// Ask the server for files whose path matches the quick-open query. Only the
+/// latest answer is shown.
+fn find_files() -> Unit {
+  reader.quick_serial += 1
+  let serial = reader.quick_serial
+  rpc(
+    "files.find",
+    { "root": reader.workspace.root, "query": reader.query, "limit": 80 },
+    result => {
+      if serial != reader.quick_serial {
+        return
+      }
+      match result {
+        Ok({ "files": Array(items), .. }) =>
+          reader.quick_picks = items.filter_map(item => {
+            match item {
+              String(file) =>
+                Some({
+                  label: file,
+                  detail: if is_dirty(file) {
+                    "未保存"
+                  } else {
+                    ""
+                  },
+                  path: Some(file),
+                  line: None,
+                  command: None,
+                  target: None,
+                })
+              _ => None
+            }
+          })
+        Ok(_) => reader.quick_picks = []
+        Err(e) => say(e)
+      }
+    },
+  )
 }
 
 ///|
@@ -252,6 +248,8 @@ fn accept() -> Unit {
         match result {
           Ok(summary) => {
             reader.workspace.apply(summary)
+            refresh_tree()
+            reveal_in_tree(value)
             reader.tree_target = Some(value)
             dismiss()
           }
@@ -267,6 +265,7 @@ fn accept() -> Unit {
             match result {
               Ok(summary) => {
                 reader.workspace.apply(summary)
+                refresh_tree()
                 renamed(from, value)
                 dismiss()
               }
@@ -304,16 +303,22 @@ fn renamed(from : String, to : String) -> Unit {
   for loc in reader.history {
     loc.path = @core.remap_path(loc.path, from, to)
   }
-  let collapsed = reader.collapsed.keys().collect()
-  reader.collapsed.clear()
-  for p in collapsed {
-    reader.collapsed[@core.remap_path(p, from, to)] = ()
+  let expanded = reader.expanded.keys().collect()
+  reader.expanded.clear()
+  for p in expanded {
+    reader.expanded[@core.remap_path(p, from, to)] = ()
+  }
+  let known = reader.workspace.known_files.keys().collect()
+  reader.workspace.known_files.clear()
+  for p in known {
+    reader.workspace.known_files[@core.remap_path(p, from, to)] = ()
   }
   reader.selected = match reader.selected {
     Some(p) => Some(@core.remap_path(p, from, to))
     None => None
   }
   reader.tree_target = Some(to)
+  reveal_in_tree(to)
 }
 
 ///|
@@ -329,6 +334,8 @@ fn save_as_accept(value : String) -> Unit {
         Err(e) => say(e)
         Ok(summary) => {
           reader.workspace.apply(summary)
+          refresh_tree()
+          reader.workspace.known_files[value] = ()
           if reader.untitled.contains(source) {
             reader.untitled.remove(source)
             doc.path = value
@@ -380,8 +387,13 @@ fn save_as_accept(value : String) -> Unit {
 fn restore_deleted() -> Unit {
   rpc("file.restore", { "root": reader.workspace.root }, result => {
     match result {
-      Ok({ "path": String(path), "workspace": summary, .. }) => {
+      Ok({ "path": String(path), "file": file, "workspace": summary, .. }) => {
         reader.workspace.apply(summary)
+        refresh_tree()
+        if file is True {
+          reader.workspace.known_files[path] = ()
+        }
+        reveal_in_tree(path)
         if reader.workspace.known(path) {
           open(path, None, true)
         }

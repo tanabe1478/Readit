@@ -430,6 +430,155 @@ fn load_texts(paths : Array[String], done : () -> Unit) -> Unit {
 }
 
 ///|
+/// Confirm with the server that the project files a request names exist, then
+/// continue. Files in folders the tree has not loaded are not known yet; the
+/// server refuses paths outside the root, links and skipped folders as usual.
+fn admit_paths(values : Array[String], done : () -> Unit) -> Unit {
+  let root = reader.workspace.root
+  let missing = []
+  for v in values {
+    let key = control_key(v)
+    if @core.starts_with(key, "/") ||
+      reader.workspace.known(key) ||
+      missing.contains(key) {
+      continue
+    }
+    missing.push(key)
+  }
+  if missing.length() == 0 {
+    done()
+    return
+  }
+  rpc(
+    "file.check",
+    { "root": root, "paths": Json::array(missing.map(Json::string)) },
+    result => {
+      if reader.workspace.root == root &&
+        result is Ok({ "files": Array(files), .. }) {
+        for f in files {
+          if f is String(p) {
+            reader.workspace.known_files[p] = ()
+          }
+        }
+      }
+      done()
+    },
+  )
+}
+
+///|
+/// Load the children of one folder ("" is the root). A reload keeps the rows
+/// shown until the answer arrives, then replaces them.
+fn load_folder(path : String) -> Unit {
+  let ws = reader.workspace
+  if ws.loading.contains(path) {
+    return
+  }
+  ws.loading[path] = ()
+  let root = ws.root
+  rpc("dir.list", { "root": root, "path": path }, result => {
+    if reader.workspace.root != root {
+      return
+    }
+    let ws = reader.workspace
+    ws.loading.remove(path)
+    let child_path = (name : String) => {
+      if path == "" {
+        name
+      } else {
+        path + "/" + name
+      }
+    }
+    let previous = ws.listed.get(path).unwrap_or([])
+    match result {
+      Ok({ "entries": Array(items), .. }) => {
+        let children : Array[@core.TreeChild] = items.filter_map(item => {
+          match item {
+            { "name": String(name), "dir": dir, .. } =>
+              Some({ name, dir: dir is True, })
+            _ => None
+          }
+        })
+        for c in previous {
+          if !c.dir && !children.iter().any(n => n.name == c.name && !n.dir) {
+            ws.known_files.remove(child_path(c.name))
+          }
+        }
+        for c in children {
+          if !c.dir {
+            ws.known_files[child_path(c.name)] = ()
+          }
+        }
+        ws.listed[path] = children
+      }
+      _ =>
+        if path == "" {
+          // Keep an empty root rather than asking again on every redraw.
+          ws.listed[""] = []
+        } else {
+          // The folder is gone: forget it and everything shown under it.
+          for p in ws.listed.keys().collect() {
+            if @core.within(p, path) {
+              ws.listed.remove(p)
+            }
+          }
+          for p in reader.expanded.keys().collect() {
+            if @core.within(p, path) {
+              reader.expanded.remove(p)
+            }
+          }
+        }
+    }
+  })
+}
+
+///|
+/// Load the root and every open folder the tree has not loaded yet.
+fn ensure_tree() -> Unit {
+  if reader.workspace.root == "" {
+    return
+  }
+  if !reader.workspace.listed.contains("") {
+    load_folder("")
+  }
+  for p in reader.expanded.keys() {
+    if !reader.workspace.listed.contains(p) {
+      load_folder(p)
+    }
+  }
+}
+
+///|
+/// Reload every loaded folder after files change on disk.
+fn refresh_tree() -> Unit {
+  for p in reader.workspace.listed.keys().collect() {
+    load_folder(p)
+  }
+}
+
+///|
+/// Open the folders above a project file so the tree shows it. A loaded folder
+/// that lacks the next step down was listed before it appeared; reload it.
+fn reveal_in_tree(path : String) -> Unit {
+  if reader.external.contains(path) || reader.untitled.contains(path) {
+    return
+  }
+  let chain = @core.ancestors(path)
+  for folder in chain {
+    reader.expanded[folder] = ()
+  }
+  chain.push(path)
+  for p in chain {
+    let parent = @core.parent_of(p)
+    let name = @core.base_name(p)
+    if reader.workspace.listed.get(parent) is Some(children) &&
+      !children.iter().any(c => c.name == name) {
+      load_folder(parent)
+    }
+  }
+}
+
+///|
 fn pin_code(path : String, line : Int) -> Result[Unit, String] {
   guard known_text(path) is Some(source) else {
     return Err("external definition is not a supported text file")

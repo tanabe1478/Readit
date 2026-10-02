@@ -33,9 +33,15 @@ fn Document::changed(self : Document) -> Bool {
 priv struct Workspace {
   mut root : String
   mut git : Bool
-  mut files : Array[String]
+  /// Files known to exist: shown in a loaded folder, read, or checked.
+  known_files : Map[String, Unit]
+  /// Children of the folders loaded so far, by folder ("" is the root).
+  listed : Map[String, Array[@core.TreeChild]]
+  /// Folders requested and not answered yet.
+  loading : Map[String, Unit]
+  /// The file a newly opened project shows first.
+  mut first : String?
   mut changed : Map[String, Unit]
-  mut directories : Array[String]
   documents : Array[Document]
   mut warnings : Array[String]
 }
@@ -59,13 +65,20 @@ fn Workspace::document(self : Workspace, path : String) -> Document? {
 }
 
 ///|
-fn Workspace::lists(self : Workspace, path : String) -> Bool {
-  self.files.contains(path)
+fn Workspace::known(self : Workspace, path : String) -> Bool {
+  self.index_of(path) is Some(_) || self.known_files.contains(path)
 }
 
 ///|
-fn Workspace::known(self : Workspace, path : String) -> Bool {
-  self.index_of(path) is Some(_) || self.lists(path)
+/// Whether a path is a folder shown in the tree.
+fn Workspace::is_folder(self : Workspace, path : String) -> Bool {
+  match self.listed.get(@core.parent_of(path)) {
+    Some(children) => {
+      let name = @core.base_name(path)
+      children.iter().any(c => c.dir && c.name == name)
+    }
+    None => false
+  }
 }
 
 ///|
@@ -73,17 +86,26 @@ fn Workspace::known(self : Workspace, path : String) -> Bool {
 fn Workspace::apply(self : Workspace, summary : Json) -> Unit {
   guard summary is Object(o) else { return }
   if o.get("root") is Some(String(root)) {
+    if root != self.root {
+      self.known_files.clear()
+      self.listed.clear()
+      self.loading.clear()
+    }
     self.root = root
   }
   if o.get("git") is Some(git) {
     self.git = git is True
   }
-  self.files = strings(o.get("files"))
+  if o.get("first") is Some(first) {
+    self.first = match first {
+      String(p) => Some(p)
+      _ => None
+    }
+  }
   self.changed = Map([])
   for p in strings(o.get("changed")) {
     self.changed[p] = ()
   }
-  self.directories = strings(o.get("directories"))
   self.warnings = strings(o.get("warnings"))
 }
 
@@ -412,7 +434,8 @@ priv struct Reader {
   mut pick_index : Int
   mut query : String
   mut replacement : String
-  collapsed : Map[String, Unit]
+  /// Folders open in the tree. Folders start closed.
+  expanded : Map[String, Unit]
   mut tree_target : String?
   mut reading_path : Bool
   mut sidebar : Bool
@@ -435,6 +458,8 @@ priv struct Reader {
   mut search_error : String
   mut search_key : String
   mut workspace_picks : Array[Pick]
+  mut quick_picks : Array[Pick]
+  mut quick_serial : Int
   mut workspace_search_serial : Int
   mut workspace_search_timer : Int?
   mut menu : String?
@@ -464,9 +489,11 @@ fn empty_workspace() -> Workspace {
   {
     root: "",
     git: false,
-    files: [],
+    known_files: Map([]),
+    listed: Map([]),
+    loading: Map([]),
+    first: None,
     changed: Map([]),
-    directories: [],
     documents: [],
     warnings: [],
   }
@@ -508,7 +535,7 @@ let reader : Reader = {
   pick_index: 0,
   query: "",
   replacement: "",
-  collapsed: Map([]),
+  expanded: Map([]),
   tree_target: None,
   reading_path: false,
   sidebar: true,
@@ -531,6 +558,8 @@ let reader : Reader = {
   search_error: "",
   search_key: "",
   workspace_picks: [],
+  quick_picks: [],
+  quick_serial: 0,
   workspace_search_serial: 0,
   workspace_search_timer: None,
   menu: None,

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect, clickText, lineText, ok } from './fixture.js';
+import { test, expect, clickText, lineText, ok, openFolders } from './fixture.js';
 
 test.use({ files: { 'docs/guide.md': '# Guide\nsearch me\n', 'src/app.py': 'import os\nNEEDLE = 1\n', 'tests/test_app.py': 'NEEDLE\n' } });
 
@@ -21,6 +21,7 @@ test('project search includes unsaved edits and opens the line', async ({ page }
 test('save all writes every dirty tab', async ({ page, readit }) => {
   await clickText(page, 0, 'Guide', { after: true });
   await page.keyboard.type('!');
+  await openFolders(page, 'src');
   await page.locator('.tree-row[data-tree="src/app.py"]').click();
   await clickText(page, 0, 'os', { after: true });
   await page.keyboard.type('.path');
@@ -31,6 +32,7 @@ test('save all writes every dirty tab', async ({ page, readit }) => {
 });
 
 test('reading path lists opened files with their provisional roles', async ({ page }) => {
+  await openFolders(page, 'tests', 'src');
   await page.locator('.tree-row[data-tree="tests/test_app.py"]').click();
   await page.locator('.tree-row[data-tree="src/app.py"]').click();
   await page.locator('button[data-act="toggle-reading"]').click();
@@ -75,6 +77,7 @@ test('without git the diff compares with the text when opened', async ({ page })
 });
 
 test('tab cycling, close all and reopen', async ({ page }) => {
+  await openFolders(page, 'src', 'tests');
   await page.locator('.tree-row[data-tree="src/app.py"]').click();
   await page.locator('.tree-row[data-tree="tests/test_app.py"]').click();
   await page.keyboard.press('Control+Tab');

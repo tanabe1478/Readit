@@ -111,6 +111,15 @@ export const test = base.extend({
 });
 export { expect };
 
+/** Open tree folders, outermost first. Folders start closed and load when opened. */
+export async function openFolders(page, ...folders) {
+  for (const folder of folders) {
+    const row = page.locator(`.tree-row[data-tree="${folder}"]`);
+    if ((await row.locator('.tree-icon').textContent()) === '›') await row.click();
+    await page.waitForFunction(() => window.readitIdle());
+  }
+}
+
 /** Box of a substring on a rendered editor line (0-based line). */
 export async function textBox(page, line, needle, view = 'editor') {
   return page.evaluate(([line, needle, view]) => {

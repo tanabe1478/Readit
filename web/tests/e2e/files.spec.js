@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect, lineText, clickText, makeProject } from './fixture.js';
+import { test, expect, lineText, clickText, makeProject, openFolders } from './fixture.js';
 
 test.use({
   files: { 'src/a.py': 'a = 1\n', 'src/sub/b.py': 'b = 2\n', 'README.md': '# readme\n' },
@@ -27,6 +27,7 @@ test('new file, save as and the tree listing', async ({ page, readit }) => {
 });
 
 test('new folder, rename a folder with open tabs, delete and restore', async ({ page, readit }) => {
+  await openFolders(page, 'src', 'src/sub');
   await page.locator('.tree-row', { hasText: 'b.py' }).click();
   await expect(page.locator('.tab.selected')).toContainText('b.py');
   await page.keyboard.type('# edit\n');
@@ -76,15 +77,21 @@ test('git baseline shows modified files and a line diff', async ({ page, readit 
   await expect(page.locator('#editor-scroll')).toBeVisible();
 });
 
-test('explorer keyboard navigation collapses folders', async ({ page }) => {
+test('explorer keyboard navigation expands and collapses folders', async ({ page }) => {
   await page.keyboard.press('Meta+Shift+e');
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('.tree-row.active')).toHaveCount(1);
+  // Folders start closed and load their children when opened.
   const before = await page.locator('.tree-row').count();
   await page.locator('.tree-row', { hasText: 'src' }).first().click();
-  expect(await page.locator('.tree-row').count()).toBeLessThan(before);
-  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => window.readitIdle());
+  const opened = await page.locator('.tree-row').count();
+  expect(opened).toBeGreaterThan(before);
+  await expect(page.locator('.tree-row[data-tree="src/a.py"]')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
   expect(await page.locator('.tree-row').count()).toBe(before);
+  await page.keyboard.press('ArrowRight');
+  expect(await page.locator('.tree-row').count()).toBe(opened);
   await page.keyboard.press('Meta+b');
   await expect(page.locator('#sidebar')).toBeHidden();
   await page.keyboard.press('Meta+b');

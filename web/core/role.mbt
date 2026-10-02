@@ -35,14 +35,19 @@ pub fn role_order(path : String) -> Int {
 ///|
 /// Sort paths into reading order, then code point order.
 pub fn sort_reading_order(paths : Array[String]) -> Unit {
-  paths.sort_by((a, b) => {
-    let d = role_order(a) - role_order(b)
+  // Each role is worked out once; comparing would redo it for every pair.
+  let keyed = paths.map(p => (role_order(p), p))
+  keyed.sort_by((a, b) => {
+    let d = a.0 - b.0
     if d != 0 {
       d
     } else {
-      lex_compare(a, b)
+      lex_compare(a.1, b.1)
     }
   })
+  for i, k in keyed {
+    paths[i] = k.1
+  }
 }
 
 ///|
