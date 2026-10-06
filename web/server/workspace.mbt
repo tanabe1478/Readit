@@ -5,11 +5,6 @@
 let max_bytes : Int = 256 * 1024
 
 ///|
-/// Cap of the server-side file index used by quick open and project search.
-/// The browser never receives the whole index; folders load as they open.
-let max_files : Int = 50000
-
-///|
 pub struct Workspace {
   root : String
   git : Bool
@@ -127,6 +122,38 @@ pub fn safe_path(root : String, relative : String) -> String raise Failure {
 }
 
 ///|
+/// `safe_path` for many files in a row. Folders already checked are recorded
+/// in `checked` and not checked again; the file itself always is. With no
+/// symbolic link on the way, the path is already canonical and inside the root.
+fn safe_path_cached(
+  root : String,
+  relative : String,
+  checked : Map[String, Unit],
+) -> String raise Failure {
+  guard components(relative) is Some(parts) else {
+    fail("リポジトリ内の相対パスが必要です")
+  }
+  let mut current = root
+  let mut walked = ""
+  for i, part in parts {
+    current = path_join(current, part)
+    walked = join_relative(walked, part)
+    let folder = i < parts.length() - 1
+    if folder && checked.contains(walked) {
+      continue
+    }
+    match (lstat_kind(current), folder) {
+      ("symlink", _) => fail("シンボリックリンクを除外: \{relative}")
+      ("", _) => fail("\{relative}: not found")
+      ("dir", true) => checked[walked] = ()
+      ("file", false) => ()
+      _ => fail("\{relative}: not a regular file")
+    }
+  }
+  path_join(root, relative)
+}
+
+///|
 fn skipped(relative : String) -> Bool {
   for part in relative.split("/") {
     let name = part.to_owned()
@@ -160,16 +187,14 @@ fn join_relative(parent : String, name : String) -> String {
 }
 
 ///|
+/// Every file below `at`. Symbolic links are never followed, so the walk
+/// cannot loop and needs no depth or count limit.
 fn walk(
   root : String,
   at : String,
   paths : Array[String],
   warnings : Array[String],
-  depth : Int,
 ) -> Unit raise Failure {
-  if depth > 12 || paths.length() >= max_files {
-    return
-  }
   let entries = read_dir(path_join(root, at)) catch {
     e => {
       node_fail(e)
@@ -190,14 +215,10 @@ fn walk(
         // ignored build output does not crowd out the sources.
         if lstat_kind(path_join(root, rel + "/.git")) == "" ||
           !git_listing(root, rel, paths, warnings) {
-          walk(root, rel, paths, warnings, depth + 1)
+          walk(root, rel, paths, warnings)
         }
       "file" => paths.push(rel)
       _ => ()
-    }
-    if paths.length() >= max_files {
-      warnings.push("最大\{max_files}ファイルまで読み込みました")
-      break
     }
   }
 }
@@ -236,9 +257,6 @@ fn git_listing(
 ) -> Bool {
   let found = git_files(root, at, warnings) catch { _ => return false }
   for p in found {
-    if paths.length() >= max_files {
-      break
-    }
     paths.push(p)
   }
   true
@@ -315,7 +333,7 @@ pub fn Workspace::files(self : Workspace) -> Array[String] {
     }
   } else {
     let out = []
-    walk(self.root, "", out, self.warnings, 0) catch {
+    walk(self.root, "", out, self.warnings) catch {
       e => self.warnings.push("一覧を読めません: \{e}")
     }
     out
@@ -329,16 +347,8 @@ pub fn Workspace::files(self : Workspace) -> Array[String] {
     }
   }
   @core.sort_reading_order(unique)
-  let files = if unique.length() > max_files {
-    self.warnings.push(
-      "\{unique.length()}ファイル中、先頭\{max_files}件を検索対象にしました",
-    )
-    unique[0:max_files].to_owned()
-  } else {
-    unique
-  }
   // Git lists paths deleted in the working tree; they cannot be edited.
-  let files = files.filter(p => lstat_kind(path_join(self.root, p)) == "file")
+  let files = unique.filter(p => lstat_kind(path_join(self.root, p)) == "file")
   self.index = Some(files)
   files
 }
@@ -407,7 +417,9 @@ pub fn Workspace::children(
 /// never reported. Outside a repository nothing is ignored.
 fn git_ignored(dir : String, names : Array[String]) -> Map[String, Unit] {
   let out : Map[String, Unit] = Map([])
-  if names.length() == 0 {
+  // Starting Git costs tens of milliseconds a folder, and a plain folder may
+  // hold hundreds of folders; outside a repository it would only fail.
+  if names.length() == 0 || !in_repository(dir) {
     return out
   }
   // -z needs --stdin, which `run` cannot feed. One name per line instead; Git
@@ -429,6 +441,21 @@ fn git_ignored(dir : String, names : Array[String]) -> Map[String, Unit] {
     }
   }
   out
+}
+
+///|
+/// Whether Git would find a repository from `dir`: a `.git` entry there or in a
+/// folder above it.
+fn in_repository(dir : String) -> Bool {
+  let mut current = dir
+  while lstat_kind(path_join(current, ".git")) == "" {
+    let parent = path_dirname(current)
+    if parent == current {
+      return false
+    }
+    current = parent
+  }
+  true
 }
 
 ///|
@@ -847,33 +874,33 @@ pub fn Workspace::disk_text(
 }
 
 ///|
-/// Walk project text: unsaved buffers win; the rest is read on the fly.
-/// `visit` returns false to stop early.
+/// Walk project text in reading order: unsaved buffers win; the rest is read
+/// from disk several files at a time without blocking other requests. `visit`
+/// returns false to stop early; `done` runs once the walk ends.
 pub fn Workspace::scan(
   self : Workspace,
   overlays : Map[String, String],
   visit : (String, String) -> Bool,
+  done : () -> Unit,
 ) -> Unit {
-  for path in self.files() {
-    let text = match overlays.get(path) {
-      Some(t) => t
-      None => {
-        let full = safe_path(self.root, path) catch { _ => continue }
-        if file_size(full) > max_bytes.to_double() {
-          continue
-        }
-        read_text(full) catch {
-          NodeError("binary") =>
-            // Rust's from_utf8 accepts NUL; read it the same way.
-            decode_utf8(read_bytes(full) catch { _ => continue }).unwrap_or("")
-          _ => continue
-        }
+  let files = self.files()
+  let checked : Map[String, Unit] = Map([])
+  read_many(
+    files.length(),
+    i => if overlays.contains(files[i]) {
+      ""
+    } else {
+      safe_path_cached(self.root, files[i], checked) catch {
+        _ => ""
       }
-    }
-    if !visit(path, text) {
-      return
-    }
-  }
+    },
+    max_bytes.to_double(),
+    (i, ok, text) => match overlays.get(files[i]) {
+      Some(t) => visit(files[i], t)
+      None => !ok || visit(files[i], text)
+    },
+    done,
+  )
 }
 
 ///|

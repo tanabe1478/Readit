@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import socket
 import tempfile
@@ -30,6 +31,26 @@ class ProtocolTests(unittest.TestCase):
         tools = replies[1]["result"]["tools"]
         self.assertIn("readit_open", [t["name"] for t in tools])
         self.assertFalse(next(t for t in tools if t["name"] == "readit_open")["annotations"]["readOnlyHint"])
+
+    def test_open_folder_resolves_the_folder_before_asking_the_editor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = pathlib.Path(tmp).resolve()
+            (real / "repo").mkdir()
+            (real / "file.py").write_text("x = 1\n")
+            cwd = pathlib.Path.cwd()
+            try:
+                os.chdir(real)
+                self.assertEqual(mcp.Server.folder("repo"), str(real / "repo"))
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(mcp.Server.folder(str(real / "repo") + "/"), str(real / "repo"))
+            for bad in [str(real / "file.py"), str(real / "missing")]:
+                with self.assertRaises(ValueError):
+                    mcp.Server.folder(bad)
+        replies = self.exchange(self.init() + [
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "readit_open_folder", "arguments": {"path": "/missing/folder"}}}])
+        self.assertTrue(replies[1]["result"]["isError"])
+        self.assertIn("not a folder", replies[1]["result"]["content"][0]["text"])
 
     def test_schema_errors_and_disconnected_editor(self):
         replies = self.exchange(self.init() + [

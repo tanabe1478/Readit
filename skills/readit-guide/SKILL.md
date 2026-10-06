@@ -13,6 +13,8 @@ Use `readit_state` first. It returns the active workspace, file, cursor, selecte
 
 The MCP server must be connected to Readit. If the tools are missing, explain that connection is needed; do not claim to have moved the editor. The project supplies `tools/readit_mcp.py`. Started with `--socket`, it controls a Readit already running with that `--control-socket`. Started with `--launch`, it starts a Readit of its own for this session on the first tool call, in the session's working directory, opens it in the browser (the first call can take a few seconds), and stops it when the session ends; each session then has its own window and tour. `readit_state.control_socket` names the socket in either case.
 
+When the code to read is outside the opened folder, such as a sibling repository or worktree, open that folder with `readit_open_folder(path)` instead of reading around it. Like an IDE's open folder, it replaces the window's project, tabs and any tour, and returns the new state; pass its `workspace` from then on. A relative `path` follows the session's working directory. Under `--launch`, calling it first starts Readit directly on that folder. If the user has unsaved edits, Readit asks them to save or discard and the call returns an error; wait for the dialog to close and read `readit_state` instead of retrying around their decision.
+
 ## Walk through the source
 
 - Inspect current text with `readit_read`; it includes unsaved edits. Find candidate files with `readit_files` and literal matches with `readit_search`.

@@ -34,7 +34,7 @@ test.describe('files the listing left out', () => {
   test('control lists project files created after opening and still refuses unsafe paths', async ({ page, readit }) => {
     const s = readit.socketPath;
     const root = (await ok(s, 'readit_state')).workspace;
-    // Files past the listing cap take the same path as files created after opening.
+    // Files in folders the tree has not loaded take the same path as files created after opening.
     fs.mkdirSync(path.join(readit.project, 'later'));
     fs.writeFileSync(path.join(readit.project, 'later/added.py'), 'added = 2\n');
     fs.writeFileSync(path.join(readit.project, 'later/tour.py'), 'toured = 3\n');
@@ -118,6 +118,85 @@ test.describe('folders load when opened', () => {
     await expect(page.locator('.tree-row[data-tree="deep/a/b/c/target.py"]')).toBeVisible();
     await expect(page.locator('.tree-row[data-tree="deep/a/sibling.py"]')).toBeVisible();
     await expect(page.locator('.tree-row[data-tree="wide/one.py"]')).toHaveCount(0);
+  });
+});
+
+test.describe('deep folders', () => {
+  // Fourteen folders deep, past the depth the listing used to stop at.
+  const deep = 'a/b/c/d/e/f/g/h/i/j/k/l/m/n/deep.py';
+  test.use({ files: { 'top.py': 'top = 1\n', [deep]: 'deep = 1\n' } });
+  test('the file index of a plain folder has no depth limit', async ({ readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    expect((await ok(s, 'readit_files', { workspace: root, filter: 'deep.py' })).files.map((f) => f.path)).toEqual([deep]);
+    expect((await ok(s, 'readit_read', { workspace: root, path: deep })).text).toBe('deep = 1\n');
+  });
+});
+
+test.describe('project search', () => {
+  // More files than are read at once, so results arrive out of order and must be put back.
+  const files = {};
+  for (let i = 0; i < 40; i++) files[`m/f${String(i).padStart(2, '0')}.py`] = `needle = ${i}\n`;
+  test.use({ files: { ...files, 'big.txt': 'needle\n' + 'x'.repeat(300 * 1024), 'bin.dat': 'needle\u0000\n' } });
+  test('readit_search keeps reading order, stops at the limit and prefers unsaved text', async ({ page, readit }) => {
+    fs.writeFileSync(path.join(readit.project, 'latin.txt'), Buffer.from([0x6e, 0x65, 0x65, 0x64, 0x6c, 0x65, 0xff, 0x0a]));
+    fs.symlinkSync(path.join(readit.project, 'm/f00.py'), path.join(readit.project, 'link.py'));
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    const order = (await ok(s, 'readit_files', { workspace: root, limit: 500 })).files.map((f) => f.path);
+    const all = await ok(s, 'readit_search', { workspace: root, query: 'needle', limit: 300 });
+    const paths = all.matches.map((m) => m.path);
+    // Too large, not UTF-8 and linked files are left out; NUL bytes are still text.
+    expect(new Set(paths)).toEqual(new Set([...Object.keys(files), 'bin.dat']));
+    expect(paths).toEqual(order.filter((p) => paths.includes(p)));
+    expect(all.truncated).toBe(false);
+    const first = await ok(s, 'readit_search', { workspace: root, query: 'needle', limit: 5 });
+    expect(first.matches).toEqual(all.matches.slice(0, 5));
+    expect(first.truncated).toBe(true);
+    // Unsaved text wins over the file on disk.
+    await ok(s, 'readit_open', { workspace: root, path: 'm/f07.py', line: 1, column: 1 });
+    await page.keyboard.press('End');
+    await page.keyboard.type(' # unsaved needle');
+    const unsaved = await ok(s, 'readit_search', { workspace: root, query: 'unsaved needle' });
+    expect(unsaved.matches.map((m) => [m.path, m.line, m.column])).toEqual([['m/f07.py', 1, 14]]);
+  });
+});
+
+test.describe('opening another folder', () => {
+  test.use({ files: { 'first.py': 'first = 1\n' } });
+  test('control opens another folder in the window and leaves unsaved edits to the user', async ({ page, readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    const other = makeProject({ 'second.py': 'second = 2\n', 'sub/third.py': 'third = 3\n' });
+    try {
+      expect((await control(s, 'readit_open_folder', { path: 'relative/path' })).error).toMatch(/absolute/);
+      expect((await control(s, 'readit_open_folder', { path: path.join(other, 'missing') })).error).toBeTruthy();
+      expect((await ok(s, 'readit_state')).workspace).toBe(root);
+      // The folder already open is left as it is.
+      expect((await ok(s, 'readit_open_folder', { path: root })).workspace).toBe(root);
+      // Unsaved edits: the user decides, through the usual confirmation.
+      await expect(page.locator('.tab.selected')).toContainText('first.py');
+      await page.keyboard.press('End');
+      await page.keyboard.type('0');
+      const asked = await control(s, 'readit_open_folder', { path: other });
+      expect(asked.error).toMatch(/unsaved changes/);
+      await expect(page.locator('#dialog-body')).toContainText('変更を保存しますか？');
+      expect((await ok(s, 'readit_state')).dialog_open).toBe(true);
+      await page.locator('button[data-act="confirm-discard"]').click();
+      await expect.poll(async () => (await ok(s, 'readit_state')).workspace).toBe(other);
+      expect(fs.readFileSync(path.join(root, 'first.py'), 'utf8')).toBe('first = 1\n');
+      // The old workspace is refused; the new one reads files the tree has not opened.
+      expect((await control(s, 'readit_read', { workspace: root, path: 'first.py' })).error).toMatch(/workspace changed/);
+      expect((await ok(s, 'readit_read', { workspace: other, path: 'sub/third.py' })).text).toBe('third = 3\n');
+      await expect(page.locator('.tree-row[data-tree="second.py"]')).toBeVisible();
+      // Without unsaved edits the folder opens at once.
+      const back = await ok(s, 'readit_open_folder', { path: root });
+      expect(back.workspace).toBe(root);
+      expect(back.dialog_open).toBe(false);
+      await expect(page.locator('.tree-row[data-tree="first.py"]')).toBeVisible();
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
   });
 });
 

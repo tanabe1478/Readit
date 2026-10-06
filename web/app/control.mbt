@@ -189,6 +189,11 @@ fn control_call(
     reply(Ok(control_state()))
     return
   }
+  // Opening a folder is what changes the workspace, so it needs none.
+  if op == "readit_open_folder" {
+    control_open_folder(args, reply)
+    return
+  }
   if json_text(args, "workspace") != Some(reader.workspace.root) {
     reply(Err("workspace changed or does not match; call readit_state first"))
     return
@@ -243,6 +248,43 @@ fn control_call(
         other => reply(other)
       }
     })
+  })
+}
+
+///|
+/// Replace the window's project with another folder, as an IDE's "open folder
+/// in this window" does. Unsaved edits are the user's to save or discard, so
+/// the usual confirmation is shown and the request ends there.
+fn control_open_folder(
+  args : Json,
+  reply : (Result[Json, String]) -> Unit,
+) -> Unit {
+  guard json_text(args, "path") is Some(path) && @core.starts_with(path, "/") else {
+    reply(Err("path must be an absolute folder path"))
+    return
+  }
+  if dialog_open() {
+    reply(Err("finish the editor dialog first"))
+    return
+  }
+  if path == reader.workspace.root {
+    reply(Ok(control_state()))
+    return
+  }
+  if affected(Switch(path, None)).length() > 0 {
+    begin(Switch(path, None))
+    reply(
+      Err(
+        "unsaved changes: Readit asks the user to save or discard them before opening the folder; call readit_state after the dialog closes",
+      ),
+    )
+    return
+  }
+  load_workspace(path, None, result => {
+    match result {
+      Ok(_) => reply(Ok(control_state()))
+      Err(e) => reply(Err(e))
+    }
   })
 }
 

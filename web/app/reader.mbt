@@ -447,7 +447,7 @@ fn finish_pending() -> Unit {
         },
       )
     }
-    Switch(root, file) => load_workspace(root, file)
+    Switch(root, file) => load_workspace(root, file, _ => ())
     Reload => reload_workspace()
   }
 }
@@ -522,10 +522,18 @@ fn fetch_files(
 ///|
 /// Switch projects. Everything is read first and applied at once, so input
 /// arriving meanwhile acts on a consistent (old) state.
-fn load_workspace(root : String, file : String?) -> Unit {
+/// `done` runs once the new project is shown, or with the reason it was not.
+fn load_workspace(
+  root : String,
+  file : String?,
+  done : (Result[Unit, String]) -> Unit,
+) -> Unit {
   rpc("workspace.open", { "path": root }, result => {
     match result {
-      Err(e) => say(e)
+      Err(e) => {
+        say(e)
+        done(Err(e))
+      }
       Ok(summary) => {
         let first = match file {
           Some(f) => Some(f)
@@ -540,6 +548,7 @@ fn load_workspace(root : String, file : String?) -> Unit {
             open(path, None, true)
           }
           say(reader.workspace.root)
+          done(Ok(()))
         })
       }
     }

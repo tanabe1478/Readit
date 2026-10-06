@@ -325,7 +325,8 @@ fn Server::dispatch(
           }
         }
       }
-      Some(search(ws, query, literal, limit, overlays))
+      search(ws, query, literal, limit, overlays, result => reply(Ok(result)))
+      None
     }
     "lsp.query" => {
       let ws = self.scope(args)
@@ -426,11 +427,13 @@ fn search(
   literal : Bool,
   limit : Int,
   overlays : Map[String, String],
-) -> Json {
+  done : (Json) -> Unit,
+) -> Unit {
   let matches = []
   let mut more = false
   if query == "" {
-    return { "matches": [], "truncated": false }
+    done({ "matches": [], "truncated": false })
+    return
   }
   let needle = if literal { query } else { @core.lower(query) }
   ws.scan(overlays, (path, text) => {
@@ -465,8 +468,7 @@ fn search(
       }
     }
     true
-  })
-  { "matches": Json::array(matches), "truncated": more }
+  }, () => done({ "matches": Json::array(matches), "truncated": more }))
 }
 
 ///|

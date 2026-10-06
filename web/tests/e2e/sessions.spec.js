@@ -9,11 +9,11 @@ import { test, expect, makeProject, repo } from './fixture.js';
 const mcpScript = path.join(repo, 'tools/readit_mcp.py');
 
 /** A stdio MCP client driving one launched Readit. */
-function session(name, project, dir) {
+function session(name, project, dir, { cwd } = {}) {
   const socketPath = path.join(dir, `${name}.sock`);
   const urlFile = path.join(dir, `${name}.url`);
   const child = spawn('python3', [mcpScript, '--launch', '--socket', socketPath, '--workspace', project], {
-    env: { ...process.env, READIT_OPEN: `sh -c 'echo "$0" > ${urlFile}'` }, stdio: ['pipe', 'pipe', 'inherit'] });
+    cwd, env: { ...process.env, READIT_OPEN: `sh -c 'echo "$0" > ${urlFile}'` }, stdio: ['pipe', 'pipe', 'inherit'] });
   let buffer = '';
   const waiting = new Map();
   child.stdout.setEncoding('utf8');
@@ -126,5 +126,33 @@ test('a closed window is reopened on the next call', async ({ page, context }) =
     a.child.kill();
     fs.rmSync(project, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a session opens the folder it needs instead of its own', async ({ page }) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-'));
+  fs.chmodSync(dir, 0o700);
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rs-parent-')));
+  const wanted = path.join(parent, 'wanted');
+  const sibling = path.join(parent, 'sibling');
+  fs.mkdirSync(wanted);
+  fs.mkdirSync(sibling);
+  fs.writeFileSync(path.join(wanted, 'w.py'), 'wanted = 1\n');
+  fs.writeFileSync(path.join(sibling, 's.py'), 'sibling = 1\n');
+  // The session's own folder does not exist: a Readit started there would fail.
+  const a = session('claude-code', path.join(parent, 'missing'), dir, { cwd: parent });
+  try {
+    await a.init();
+    const opened = a.call('readit_open_folder', { path: wanted });
+    await openWhenAsked(page, a.urlFile);
+    expect((await opened).workspace).toBe(wanted);
+    // Later folders replace it in the same window; relative paths follow the session's directory.
+    const moved = await a.call('readit_open_folder', { path: 'sibling' });
+    expect(moved.workspace).toBe(sibling);
+    await expect(page.locator('.tree-row[data-tree="s.py"]')).toBeVisible();
+    await expect(a.call('readit_open_folder', { path: 'no-such-folder' })).rejects.toThrow(/not a folder/);
+  } finally {
+    a.child.kill();
+    for (const p of [parent, dir]) fs.rmSync(p, { recursive: true, force: true });
   }
 });

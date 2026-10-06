@@ -175,6 +175,50 @@ pub fn read_text(p : String) -> String raise NodeError {
 }
 
 ///|
+/// Read files concurrently, like a search tool, and hand them over in order.
+/// `path_at(i)` gives the full path of file i, or "" to skip it unread.
+/// `deliver(i, ok, text)` gets its UTF-8 text, or ok=false when it is missing,
+/// not a regular file, larger than `max_bytes` or not UTF-8 (NUL bytes are
+/// text, as in Rust's from_utf8); returning false stops the reading. `done`
+/// runs once, after the last delivery or the stop.
+pub extern "js" fn read_many(
+  count : Int,
+  path_at : (Int) -> String,
+  max_bytes : Double,
+  deliver : (Int, Bool, String) -> Bool,
+  done : () -> Unit,
+) -> Unit =
+  #|(count, pathAt, max, deliver, done) => {
+  #|  const R = globalThis.__readit, fsp = R.fs.promises, width = 32, ready = new Map();
+  #|  let next = 0, emit = 0, stopped = false, ended = false;
+  #|  const read = async (p) => {
+  #|    if (p === '') return null;
+  #|    let h;
+  #|    try {
+  #|      h = await fsp.open(p, 'r');
+  #|      const st = await h.stat();
+  #|      if (!st.isFile() || st.size > max) return null;
+  #|      return R.utf8.decode(await h.readFile());
+  #|    } catch (e) { return null; } finally { if (h) await h.close().catch(() => {}); }
+  #|  };
+  #|  const finish = () => { if (!ended) { ended = true; done(); } };
+  #|  const pump = () => {
+  #|    while (!stopped && next < count && next - emit < width) {
+  #|      const i = next++;
+  #|      read(pathAt(i)).then((text) => { ready.set(i, text); flush(); });
+  #|    }
+  #|  };
+  #|  const flush = () => {
+  #|    while (!stopped && ready.has(emit)) {
+  #|      const text = ready.get(emit); ready.delete(emit);
+  #|      if (!deliver(emit, text !== null, text ?? '')) stopped = true; else emit++;
+  #|    }
+  #|    if (stopped || emit >= count) finish(); else pump();
+  #|  };
+  #|  if (count === 0) finish(); else pump();
+  #|}
+
+///|
 /// Raw file content as Latin-1, so bytes compare exactly.
 extern "js" fn js_read_bytes(p : String) -> String = "(p) => globalThis.__readit.wrap(() => globalThis.__readit.fs.readFileSync(p).toString('latin1'))"
 
