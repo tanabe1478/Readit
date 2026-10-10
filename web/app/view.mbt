@@ -270,7 +270,7 @@ fn editor_scroll_target(layout : Layout) -> Double {
   let y = layout.top(line)
   let row = layout.top(line + 1) - y
   match mode {
-    1 => (y - lh).max(0.0)
+    1 => (y - lh * 4.0).max(0.0)
     2 => (y - height / 2.0 + lh).max(0.0)
     _ =>
       if y < base {

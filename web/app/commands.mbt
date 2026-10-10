@@ -484,7 +484,6 @@ fn run_command(command : String) -> Unit {
     "zoom-out" => reader.font_size = (reader.font_size - 1.0).max(10.0)
     "reset-zoom" => reader.font_size = 14.0
     "quit" => begin(Quit)
-    "toggle-reading" => reader.reading_path = !reader.reading_path
     "focus-explorer" => {
       reader.sidebar = true
       reader.focus = "explorer"

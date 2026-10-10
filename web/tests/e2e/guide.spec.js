@@ -1,7 +1,7 @@
 // Prepared tours, overviews and bubble placement, ported from ui.rs and ui_e2e_tests.rs.
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect, control, ok } from './fixture.js';
+import { test, expect, control, ok, clickText } from './fixture.js';
 
 const step = (id, line, text, file = 'sample.py') => ({ id, title: id, body: '解説', path: file, line, column: 1, expected_text: text });
 
@@ -93,11 +93,13 @@ test.describe('overview', () => {
     await expect(page.locator('#overview')).toBeVisible();
     await page.locator('button[data-act="chapter"][data-arg="1"]').click();
     expect((await ok(s, 'readit_state')).guide.id).toBe('two');
-    // Completing the tour keeps its overview.
+    // Completing the tour keeps its overview and returns to it.
     await page.locator('button[data-act="guide-next"]').click();
     state = await ok(s, 'readit_state');
     expect(state.guide).toBeNull();
     expect(state.guide_tour).not.toBeNull();
+    expect(state.overview_visible).toBe(true);
+    await expect(page.locator('#overview')).toBeVisible();
     await page.locator('#topbar button[data-act="overview"]').click();
     await page.locator('button[data-act="chapter"][data-arg="0"]').click();
     await page.locator('button[data-act="guide-ask"]').click();
@@ -119,6 +121,48 @@ test.describe('overview', () => {
     state = await ok(s, 'readit_state');
     expect(state.guide_tour).toBeNull();
     expect(state.overview_visible).toBe(false);
+  });
+});
+
+test.describe('edits around a tour', () => {
+  test.use({ files: { 'a.py': 'alpha = 1\nbeta = 2\n', 'b.py': 'gamma = 3\n', 'c.py': 'delta = 4\n' } });
+  test('steps follow unique text through edits and tour tabs do not pile up', async ({ page, readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    const steps = [
+      { id: 'one', title: 'A', body: 'a', path: 'a.py', line: 2, column: 1, expected_text: 'beta = 2' },
+      { id: 'two', title: 'B', body: 'b', path: 'b.py', line: 1, column: 1, expected_text: 'gamma = 3' },
+      { id: 'three', title: 'C', body: 'c', path: 'c.py', line: 1, column: 1, expected_text: 'delta = 4' },
+    ];
+    const overview = { title: 'T', summary: 's', relationships: 'a → b → c', chapters: [{ title: 'all', summary: 'x', start_step: 'one' }] };
+    await ok(s, 'readit_guide_load', { workspace: root, id: 'edits', event_sequence: 0, steps, overview });
+    await page.locator('button[data-act="chapter"][data-arg="0"]').click();
+    // Insert a line above the anchored one: the step moves with its text.
+    await clickText(page, 0, 'alpha');
+    await page.keyboard.press('Home');
+    await page.keyboard.type('inserted = 0');
+    await page.keyboard.press('Enter');
+    let state = await ok(s, 'readit_state');
+    expect(state.guide.id).toBe('one');
+    await page.locator('#topbar button[data-act="overview"]').click();
+    await expect(page.locator('#overview')).not.toContainText('コードに変更があります');
+    await page.locator('button[data-act="chapter"][data-arg="0"]').click();
+    await page.locator('button[data-act="guide-next"]').click();
+    await expect.poll(async () => (await ok(s, 'readit_state')).guide?.id).toBe('two');
+    await page.locator('button[data-act="guide-next"]').click();
+    await expect.poll(async () => (await ok(s, 'readit_state')).guide?.id).toBe('three');
+    state = await ok(s, 'readit_state');
+    // a.py stays (the reader edited it); b.py was the tour's and is gone.
+    const tabs = state.tabs.map((t) => path.basename(t.path));
+    expect(tabs).toContain('a.py');
+    expect(tabs).not.toContain('b.py');
+    expect(tabs).toContain('c.py');
+    // Removing the anchored text itself still marks the tour stale.
+    await page.locator('.tree-row[data-tree="b.py"]').click();
+    await page.keyboard.press('Meta+a');
+    await page.keyboard.type('gone');
+    await page.locator('#topbar button[data-act="overview"]').click();
+    await expect(page.locator('#overview')).toContainText('コードに変更があります');
   });
 });
 
@@ -167,6 +211,28 @@ test.describe('bubble placement', () => {
     await page.mouse.wheel(0, dy);
     await page.waitForTimeout(150);
   }
+
+  test('a miscounted column is corrected when the text is unique on its line', async ({ page, readit }) => {
+    const s = readit.socketPath;
+    const root = (await ok(s, 'readit_state')).workspace;
+    const step = { id: 'one', path: 'sample.py', line: 40, column: 7, expected_text: 'value_40 = 40', title: 'A value', body: 'Bound here.' };
+    await ok(s, 'readit_guide_load', { workspace: root, id: 'column', event_sequence: 0, steps: [step] });
+    const state = await ok(s, 'readit_state');
+    expect(state.selection.start_column).toBe(1);
+    expect(state.selection.text).toBe('value_40 = 40');
+    // The bubble sits beside the annotated line, leaving the lines below readable.
+    const anchor = await page.locator('.lines[data-view="editor"] .row[data-line="39"]').boundingBox();
+    const box = await bubble(page);
+    expect(box.x).toBeGreaterThan(anchor.x + 100);
+    expect(box.y).toBeLessThan(anchor.y + anchor.height);
+    // Text that is unique elsewhere in the file is accepted at its real line;
+    // text that is nowhere is rejected, naming the step.
+    step.expected_text = 'value_41 = 41';
+    await ok(s, 'readit_guide_load', { workspace: root, id: 'column2', event_sequence: 0, steps: [step] });
+    expect((await ok(s, 'readit_state')).selection.start_line).toBe(41);
+    step.expected_text = 'value_999 = 999';
+    expect((await control(s, 'readit_guide_load', { workspace: root, id: 'column3', event_sequence: 0, steps: [step] })).error).toMatch(/step one: .*expected_text/);
+  });
 
   test('guide scroll then drag to bottom', async ({ page, readit }) => {
     const s = readit.socketPath;

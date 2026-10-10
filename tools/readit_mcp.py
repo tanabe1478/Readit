@@ -104,7 +104,7 @@ TOOLS = [
     tool("readit_guide_load", "Load an entire prepared tour atomically. Next/back run locally without AI. Provide overview to open a native overview tab before code. Read all source first. Step events are informational, not requests to generate another explanation. A prediction step keeps Next disabled until the reader records a prediction or chooses unknown; that happens locally and emits a prediction event, not a request for an answer.",
          {"workspace": WORKSPACE, "id": string("Tour id."), "event_sequence": integer("Latest guide event sequence.", minimum=0), "steps": {**STEPS, "minItems": 1}, "overview": OVERVIEW},
          ("workspace", "id", "event_sequence", "steps"), True),
-    tool("readit_guide_revise", "Answer a pending tour question and atomically replace all unread steps after visited_through. Preserve visited history and current position. Read state/events first; reject stale navigation or ended tours. Existing steps remain usable while generating. An empty steps array ends the route after visited history.",
+    tool("readit_guide_revise", "Answer a pending tour question and atomically replace all unread steps after visited_through, when the question changes what the rest of the route should cover. When the prepared steps still fit, answer with readit_guide_answer instead and keep them. Preserve visited history and current position. Read state/events first; reject stale navigation or ended tours. Existing steps remain usable while generating. An empty steps array ends the route after visited history.",
          {"workspace": WORKSPACE, "id": string("Current tour id."), "event_sequence": integer("Latest guide event sequence.", minimum=0), "question_sequence": integer("Pending question event sequence."), "answer": string("Answer to actual question, max 4000 characters."), "steps": STEPS, "overview": OVERVIEW},
          ("workspace", "id", "event_sequence", "question_sequence", "answer", "steps"), True),
     tool("readit_pin", "Keep a read-only snapshot of related code beside the main editor without changing its active file or cursor. Includes unsaved text. One pinned file at a time; another pin replaces it. Re-pin to refresh after edits.", {"workspace": WORKSPACE, "path": PATH, "line": LINE}, ("workspace", "path"), True),
@@ -114,7 +114,7 @@ TOOLS = [
          ("workspace", "id", "title", "body", "path", "line", "column", "expected_text", "event_sequence"), True),
     tool("readit_guide_events", "Read user responses after a sequence number. Actions: next, question, end, interrupted, cleared. Question events include user text, source range, exact code, current explanation and previous Q&A. Answer using readit_guide_answer without advancing the guide. Non-consuming; store latest_sequence. If truncated, stop and inspect state. Poll while actively guiding, not indefinitely after end.",
          {"workspace": WORKSPACE, "after": integer("Last received sequence, initially zero.", minimum=0)}, ("workspace", "after")),
-    tool("readit_guide_answer", "Answer a pending user question in the existing bubble. Preserves the question, source location and guide step. Rejects responses after end, source changes or a different question. Do not substitute a canned explanation for the user question.",
+    tool("readit_guide_answer", "Answer a pending user question in the existing bubble, in a prepared tour or a single explanation. Preserves the question, source location, guide step and the remaining tour steps. Rejects responses after end, source changes or a different question. Do not substitute a canned explanation for the user question.",
          {"workspace": WORKSPACE, "id": string("Step id from the question event."), "question_sequence": integer("Sequence of the question event."), "body": string("Answer to the actual question, plain text, at most 4000 characters.")}, ("workspace", "id", "question_sequence", "body"), True),
     tool("readit_guide_clear", "Remove the current explanation bubble.", {"workspace": WORKSPACE}, ("workspace",), True),
     tool("readit_state", "Inspect the visible Readit window, cursor, selection, tabs, unsaved flags and viewport. Start here.", {}),
@@ -123,9 +123,11 @@ TOOLS = [
     tool("readit_files", "List the editor's workspace text files; paginate with next_offset. Does not navigate the UI.",
          {"workspace": WORKSPACE, "filter": string("Case-insensitive path substring."), "offset": integer("Pagination offset.", minimum=0), "limit": integer("Page size.", 500)}, ("workspace",)),
     tool("readit_read", "Read current text, including unsaved edits. Use small ranges; does not change the visible file.",
-         {"workspace": WORKSPACE, "path": PATH, "start_line": LINE, "line_count": integer("Number of lines to read.", 400)}, ("workspace", "path")),
+         {"workspace": WORKSPACE, "path": PATH, "start_line": LINE, "line_count": integer("Number of lines to read.", 400),
+          "numbered": {"type": "boolean", "description": "Prefix each line with its one-based number, as 'NNN| text', to anchor steps without counting."}}, ("workspace", "path")),
     tool("readit_search", "Find literal occurrences in current workspace text, including unsaved edits. Use readit_symbol for semantic references.",
-         {"workspace": WORKSPACE, "query": string("Nonempty, case-sensitive literal query."), "limit": integer("Maximum matches.", 300)}, ("workspace", "query")),
+         {"workspace": WORKSPACE, "query": string("Nonempty, case-sensitive literal query."), "limit": integer("Maximum matches.", 300),
+          "prefix": string("Optional workspace-relative path prefix, such as web/app/ or tools/, to search only that part of the project.")}, ("workspace", "query")),
     tool("readit_open", "Show a file at a line and select an optional [start,end) range so the user can follow. Preserves unsaved buffers and records navigation history.",
          {"workspace": WORKSPACE, "path": PATH, "line": LINE, "column": COLUMN, "end_line": LINE, "end_column": COLUMN}, ("workspace", "path"), True),
     tool("readit_symbol", "Resolve the symbol at the visible editor cursor via its language server. Returns real definition/reference locations. By default displays results in the editor; then use readit_open to show a chosen target.",
@@ -406,9 +408,22 @@ class Server:
                 result = editor_call(self.endpoint, spec["name"], arguments)
             except (OSError, ValueError, KeyError) as error:
                 return {"content": [{"type": "text", "text": str(error)}], "isError": True}
+            if spec["name"] in ("readit_guide_load", "readit_guide_revise") and isinstance(result, dict):
+                # The caller just sent the overview and steps; echoing them back only costs context.
+                tour = result.get("guide_tour")
+                if isinstance(tour, dict):
+                    overview = tour.get("overview")
+                    if isinstance(overview, dict):
+                        tour["overview"] = {"title": overview.get("title"), "chapters": len(overview.get("chapters") or []),
+                                            "claims": len(overview.get("claims") or [])}
+                    tour["steps"] = [step.get("id") for step in tour.get("steps") or [] if isinstance(step, dict)]
             if spec["name"] == "readit_state" and isinstance(result, dict):
                 # tools/readit_wait.py needs the same socket to wait for this window's questions.
                 result["control_socket"] = self.endpoint
+                # The AI client does not know where Readit lives; hand it the ready command.
+                result["wait_command"] = " ".join(shlex.quote(part) for part in (
+                    sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "readit_wait.py"),
+                    "--socket", self.endpoint, "--stop-when-idle"))
             return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}], "structuredContent": result, "isError": False}
         raise RpcError(-32601, "method not found")
 
@@ -451,6 +466,11 @@ if __name__ == "__main__":
     parser.add_argument("--workspace", default=os.getcwd(), help="Folder a launched Readit opens (default: current directory)")
     parser.add_argument("--label", help="Window name of a launched Readit (default: the MCP client's name)")
     options = parser.parse_args()
+    if options.launch and not options.socket and os.environ.get("READIT_SOCKET"):
+        # A Readit the user started by hand (the readit launcher) outlives any AI
+        # session, which one-shot runs such as `claude -p` need.
+        options.launch = False
+        options.socket = os.path.expanduser(os.environ["READIT_SOCKET"])
     if not options.launch and not options.socket:
         parser.error("--socket is required unless --launch is given")
     launcher = None

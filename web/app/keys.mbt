@@ -419,13 +419,13 @@ fn explorer_key(desc : String) -> Bool {
   if reader.tree_target is Some(t) {
     for i, entry in list {
       if entry.path == t {
-        let y = i.to_double() * tree_row_height
+        let y = i.to_double() * tree_row_height()
         let top = js_scroll_top("tree-scroll")
         let h = js_client_height("tree-scroll")
         if y < top {
           js_set_scroll_top("tree-scroll", y)
-        } else if y + tree_row_height > top + h {
-          js_set_scroll_top("tree-scroll", y + tree_row_height - h)
+        } else if y + tree_row_height() > top + h {
+          js_set_scroll_top("tree-scroll", y + tree_row_height() - h)
         }
       }
     }

@@ -127,6 +127,9 @@ fn shortcut_of(command : String) -> String {
 ///|
 fn render_topbar() -> String {
   let out = StringBuilder()
+  out.write_string(
+    "<button class=\"btn mobile-only\" data-act=\"sidebar\" aria-label=\"ファイルツリー\" aria-expanded=\"false\">☰</button>",
+  )
   out.write_string("<div class=\"menubar\">")
   for m in menus {
     let (name, _) = m
@@ -143,9 +146,17 @@ fn render_topbar() -> String {
   if reader.tour is Some(t) && t.overview is Some(_) {
     out.write_string(button("overview", "概観に戻る"))
   }
-  out.write_string(button("quick-open", "ファイルを開く…  ⌘P"))
+  out.write_string(
+    button(
+      "quick-open",
+      if narrow_layout() {
+        "開く"
+      } else {
+        "ファイルを開く…  ⌘P"
+      },
+    ),
+  )
   out.write_string(button("open-folder", "フォルダを開く"))
-  out.write_string(button("commands", "コマンド  ⇧⌘P"))
   out.write_string("</div>")
   out.to_string()
 }
@@ -184,22 +195,28 @@ fn tree_entries() -> Array[@core.TreeEntry] {
 }
 
 ///|
-let tree_row_height : Double = 29.0
+fn tree_row_height() -> Double {
+  if narrow_layout() {
+    44.0
+  } else {
+    29.0
+  }
+}
 
 ///|
 fn render_tree() -> String {
   let entries = tree_entries()
   let top = js_scroll_top("tree-scroll")
   let height = js_client_height("tree-scroll").max(600.0)
-  let first = ((top / tree_row_height).floor().to_int() - 10).clamp(
+  let first = ((top / tree_row_height()).floor().to_int() - 10).clamp(
     min=0,
     max=entries.length(),
   )
-  let last = ((top + height) / tree_row_height).ceil().to_int() + 10
+  let last = ((top + height) / tree_row_height()).ceil().to_int() + 10
   let last = last.clamp(min=first, max=entries.length())
   let out = StringBuilder()
   out.write_string(
-    "<div class=\"tree-rows\" style=\"height:\{px(entries.length().to_double() * tree_row_height)}\">",
+    "<div class=\"tree-rows\" style=\"height:\{px(entries.length().to_double() * tree_row_height())}\">",
   )
   for i in first..<last {
     let entry = entries[i]
@@ -231,7 +248,7 @@ fn render_tree() -> String {
       }
     }
     out.write_string(
-      "<div class=\"tree-row\{if active { " active" } else { "" }}\" data-act=\"tree\" data-arg=\"\{e(entry.path)}\" data-tree=\"\{e(entry.path)}\" title=\"\{e(reader.workspace.absolute(entry.path))}\" style=\"top:\{px(i.to_double() * tree_row_height)};padding-left:\{px(14.0 + entry.depth.to_double() * 14.0)}\"><span class=\"tree-icon\">\{icon}</span><span class=\"tree-name\">\{e(entry.name)}</span><span class=\"badge\">\{badge}</span></div>",
+      "<div class=\"tree-row\{if active { " active" } else { "" }}\" data-act=\"tree\" data-arg=\"\{e(entry.path)}\" data-tree=\"\{e(entry.path)}\" title=\"\{e(reader.workspace.absolute(entry.path))}\" style=\"top:\{px(i.to_double() * tree_row_height())};padding-left:\{px(14.0 + entry.depth.to_double() * 14.0)}\"><span class=\"tree-icon\">\{icon}</span><span class=\"tree-name\">\{e(entry.name)}</span><span class=\"badge\">\{badge}</span></div>",
     )
   }
   out.write_string("</div>")
@@ -239,25 +256,8 @@ fn render_tree() -> String {
 }
 
 ///|
-fn render_reading_path() -> String {
-  let out = StringBuilder()
-  let mut n = 0
-  for d in reader.workspace.documents {
-    if reader.external.contains(d.path) {
-      continue
-    }
-    n += 1
-    let number = if n < 10 { "0\{n}" } else { n.to_string() }
-    out.write_string(
-      "<div class=\"route\" data-act=\"open\" data-arg=\"\{e(d.path)}\">\{caption("\{number} · \{@core.role(d.path)}")}<div>\{e(d.path)}</div></div>",
-    )
-  }
-  out.to_string()
-}
-
-///|
 fn render_sidebar_head() -> String {
-  "<div class=\"explorer-head\">\{caption(if reader.reading_path { "READING PATH" } else { "EXPLORER" })}<div class=\"row-buttons\">\{button("new", "+")}\{button("folder", "+ ▱")}</div></div><div class=\"explorer-root\">⌄  \{e(@core.lower(reader.workspace.name()) |> upper)}</div>"
+  "<div class=\"explorer-head\">\{caption("EXPLORER")}<div class=\"row-buttons\">\{button("sidebar", "閉じる", extra=" mobile-only")}</div></div><div class=\"explorer-root\">⌄  \{e(@core.lower(reader.workspace.name()) |> upper)}</div>"
 }
 
 ///|
@@ -274,11 +274,6 @@ fn upper(text : String) -> String {
     )
   }
   out.to_string()
-}
-
-///|
-fn render_sidebar_foot() -> String {
-  "<div class=\"row-buttons\">\{button("rename", "名前変更")}\{button("delete", "削除…")}</div>\{button("toggle-reading", if reader.reading_path { "ファイルツリーに戻る" } else { "読む順番を表示" })}"
 }
 
 ///|
@@ -309,7 +304,6 @@ fn render_pathbar() -> String {
   let actions = if path == "" {
     ""
   } else {
-    button("save", "保存  ⌘S") +
     button("compare", if reader.compare { "編集に戻る" } else { "差分" })
   }
   "<div class=\"full-path\">\{caption(label)}</div><div class=\"row-buttons\">\{actions}</div>"
@@ -325,11 +319,25 @@ fn render_navbar() -> String {
   }
   button("back", "←") +
   button("forward", "→") +
-  button("definition", "定義 F12") +
-  button("references", "使用箇所 ⇧F12") +
-  button("symbols", "シンボル ⇧⌘O") +
-  button("pin-code", "横に固定") +
-  button("hover", "型・説明") +
+  button("definition", if narrow_layout() { "定義" } else { "定義 F12" }) +
+  button(
+    "references",
+    if narrow_layout() {
+      "使用箇所"
+    } else {
+      "使用箇所 ⇧F12"
+    },
+  ) +
+  button(
+    "symbols",
+    if narrow_layout() {
+      "シンボル"
+    } else {
+      "シンボル ⇧⌘O"
+    },
+  ) +
+  button("pin-code", if narrow_layout() { "固定" } else { "横に固定" }) +
+  button("hover", if narrow_layout() { "説明" } else { "型・説明" }) +
   external
 }
 
@@ -404,6 +412,42 @@ fn render_overview() -> String {
       "<div class=\"stale\">コードに変更があります。外部AIに概観とガイドの更新を依頼してください。</div>",
     )
   }
+  out.write_string(
+    "<div class=\"card\"><b>構成と処理の流れ</b><div class=\"relations\">\{e(overview.relationships)}</div></div><b>読む章</b>",
+  )
+  for i, chapter in overview.chapters {
+    let (start, end) = chapter_bounds(tour, overview, i)
+    let mut seen = 0
+    for j in start..<end {
+      if tour.seen.contains(tour.steps[j].id) {
+        seen += 1
+      }
+    }
+    let current = tour.index >= start &&
+      tour.index < end &&
+      tour.seen.length() > 0
+    let number = if i + 1 < 10 { "0\{i + 1}" } else { (i + 1).to_string() }
+    out.write_string(
+      "<div class=\"card chapter\{if current { " current" } else { "" }}\"><div class=\"chapter-head\"><b>\{number}  \{e(chapter.title)}</b>\{caption("\{seen} / \{end - start} 箇所を表示済み\{if current { " · 現在の章" } else { "" }}")}</div><div>\{e(chapter.summary)}</div>",
+    )
+    let labels = []
+    for j in start..<end {
+      let label = tour.steps[j].path
+      if !labels.contains(label) {
+        labels.push(label)
+      }
+    }
+    @core.sort_strings(labels)
+    for label in labels {
+      out.write_string("<div class=\"file-label\">\{e(label)}</div>")
+    }
+    if !stale {
+      out.write_string(
+        button("chapter", "コードを読む →", arg=i.to_string()),
+      )
+    }
+    out.write_string("</div>")
+  }
   if overview.claims is Some(claims) && claims.length() > 0 {
     out.write_string("<b>今回の重要なポイント</b>")
     let mut k = 0
@@ -435,9 +479,15 @@ fn render_overview() -> String {
     )
     if open {
       out.write_string(
-        caption("この解説が前提にしたことと、今回の焦点です。違っていればAIに伝えてください。"),
+        caption(
+          "この解説が前提にしたことと、今回の焦点です。違っていればAIに伝えてください。",
+        ),
       )
-      for section in [("知っている前提", context.known), ("今回見るもの", context.focus)] {
+      for
+        section in [
+          ("知っている前提", context.known),
+          ("今回見るもの", context.focus),
+        ] {
         let (title, items) = section
         if items.length() > 0 {
           out.write_string("<b>\{title}</b><ul>")
@@ -447,52 +497,6 @@ fn render_overview() -> String {
           out.write_string("</ul>")
         }
       }
-    }
-    out.write_string("</div>")
-  }
-  out.write_string("<div class=\"card\"><b>構成と処理の流れ</b>")
-  for line in @core.split_newlines(overview.relationships) {
-    out.write_string("<div>\{e(line)}</div>")
-  }
-  out.write_string("</div><b>読む章</b>")
-  for i, chapter in overview.chapters {
-    let (start, end) = chapter_bounds(tour, overview, i)
-    let mut seen = 0
-    for j in start..<end {
-      if tour.seen.contains(tour.steps[j].id) {
-        seen += 1
-      }
-    }
-    let current = tour.index >= start &&
-      tour.index < end &&
-      tour.seen.length() > 0
-    let number = if i + 1 < 10 { "0\{i + 1}" } else { (i + 1).to_string() }
-    out.write_string(
-      "<div class=\"card chapter\{if current { " current" } else { "" }}\"><div class=\"chapter-head\"><b>\{number}  \{e(chapter.title)}</b>\{caption("\{seen} / \{end - start} 箇所を表示済み\{if current { " · 現在の章" } else { "" }}")}</div><div>\{e(chapter.summary)}</div>",
-    )
-    // A full path has no break opportunity, so each file shows as folder/name.
-    let labels = []
-    for j in start..<end {
-      let path = tour.steps[j].path
-      let name = @core.base_name(path)
-      let parent = @core.base_name(@core.parent_of(path))
-      let label = if @core.parent_of(path) == "" {
-        name
-      } else {
-        "\{parent}/\{name}"
-      }
-      if !labels.contains(label) {
-        labels.push(label)
-      }
-    }
-    @core.sort_strings(labels)
-    for label in labels {
-      out.write_string("<div class=\"file-label\">\{e(label)}</div>")
-    }
-    if !stale {
-      out.write_string(
-        button("chapter", "コードを読む →", arg=i.to_string()),
-      )
     }
     out.write_string("</div>")
   }
@@ -561,7 +565,12 @@ fn render_status() -> String {
     Some(path) => "\{path} を読み込んでいます…"
     None => reader.message
   }
-  "\{caption(message)}\{caption("Ln \{p.line + 1}, Col \{p.character + 1}  ·  \{@core.language(path)}  ·  UTF-8  ·  \{if reader.wrap { "Wrap" } else { "No wrap" }}\{control}")}"
+  let detail = if narrow_layout() {
+    "\{p.line + 1}:\{p.character + 1} · \{@core.language(path)}\{control}"
+  } else {
+    "Ln \{p.line + 1}, Col \{p.character + 1}  ·  \{@core.language(path)}  ·  UTF-8  ·  \{if reader.wrap { "Wrap" } else { "No wrap" }}\{control}"
+  }
+  "\{caption(if narrow_layout() && message == default_status { "" } else { message })}\{caption(detail)}"
 }
 
 ///|
@@ -609,7 +618,12 @@ fn render_dialog_shell() -> String {
   } else {
     ""
   }
-  "<div class=\"dialog-title\"><span>\{e(dialog_title(dialog))}</span>\{caption("Esc 閉じる")}</div><div class=\"dialog-inputs\">\{input}\{replacement}</div>"
+  let close = if narrow_layout() {
+    button("cancel-dialog", "閉じる")
+  } else {
+    caption("Esc 閉じる")
+  }
+  "<div class=\"dialog-title\"><span>\{e(dialog_title(dialog))}</span>\{close}</div><div class=\"dialog-inputs\">\{input}\{replacement}</div>"
 }
 
 ///|
@@ -685,7 +699,7 @@ fn render_dialog_body() -> String {
     _ => ()
   }
   out.write_string(
-    "<div class=\"dialog-message\">\{caption(reader.message)}</div>",
+    "<div class=\"dialog-message\">\{caption(if narrow_layout() && reader.message == default_status { "" } else { reader.message })}</div>",
   )
   out.to_string()
 }

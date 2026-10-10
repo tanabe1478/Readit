@@ -30,14 +30,23 @@ function revealLine(view, line, mode, lh) {
   if (target !== top) box.scrollTop = target;
 }
 
-function placeInput() {
+export function placeInput() {
   const input = $('editor-input');
   const caret = document.querySelector('#editor-content .caret');
   if (!input) return;
   if (!caret) { input.style.left = '-1000px'; return; }
   const r = caret.getBoundingClientRect();
-  input.style.left = r.left + 'px';
-  input.style.top = r.top + 'px';
+  let left = r.left, top = r.top;
+  if (window.innerWidth <= 900) {
+    const viewport = window.visualViewport;
+    const x = viewport?.offsetLeft || 0, y = viewport?.offsetTop || 0;
+    const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight;
+    const inputWidth = input.getBoundingClientRect().width;
+    left = Math.max(x + 8, Math.min(left, x + width - inputWidth - 8));
+    top = Math.max(y, Math.min(top, y + height - r.height));
+  }
+  input.style.left = left + 'px';
+  input.style.top = top + 'px';
   input.style.height = r.height + 'px';
 }
 
@@ -49,7 +58,15 @@ export const dom = {
     if (prop === 'cssText') { if (el.dataset.css !== value) { el.dataset.css = value; el.style.cssText = value; } return; }
     if (el.style[prop] !== value) el.style[prop] = value;
   },
-  set_class: (id, name, on) => { const el = $(id); if (el) el.classList.toggle(name, !!on); },
+  set_class: (id, name, on) => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.toggle(name, !!on);
+    // Derive accessibility from app state without rebuilding header nodes.
+    if (id === 'app' && name === 'sidebar-open') {
+      el.querySelector('#topbar [data-act="sidebar"]')?.setAttribute('aria-expanded', String(!!on));
+    }
+  },
   focus: (id) => { const el = $(id); if (el && document.activeElement !== el) el.focus({ preventScroll: true }); },
   has_focus: (id) => {
     const a = document.activeElement;
@@ -71,6 +88,18 @@ export const dom = {
     return [r.left, r.top, r.width, r.height].map((v) => v.toFixed(1)).join(',');
   },
   range_rect: rangeRect,
+  // Right edge of the rendered code on lines [first, last] of a view.
+  rows_right: (view, first, last) => {
+    let right = 0;
+    for (let line = first; line <= last; line++) {
+      const code = document.querySelector(`.lines[data-view="${view}"] .row[data-line="${line}"] .code`);
+      if (!code) continue;
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      right = Math.max(right, range.getBoundingClientRect().right);
+    }
+    return right;
+  },
   reveal_line: revealLine,
   place_input: placeInput,
   scroll_into_view: (id) => { const el = $(id); if (el) el.scrollIntoView({ block: 'nearest' }); },

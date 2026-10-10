@@ -407,7 +407,7 @@ fn control_sync(
       if target < 0 {
         fail("question no longer pending")
       }
-      if control_text(updated[target].path) != updated[target].source {
+      if !refresh_guide_anchor(updated[target]) {
         fail("question source changed")
       }
       let prefix = tour.visited + 1
@@ -574,7 +574,16 @@ fn control_sync(
         fail("start_line is outside the file")
       }
       let end = (start - 1 + count).min(lines.length())
-      let content = lines[start - 1:end].to_owned().join("\n")
+      let numbered = json_field(args, "numbered") is Some(True)
+      let content = if numbered {
+        let out = []
+        for i in (start - 1)..<end {
+          out.push("\{i + 1}| \{lines[i]}")
+        }
+        out.join("\n")
+      } else {
+        lines[start - 1:end].to_owned().join("\n")
+      }
       if content.length() > 200_000 {
         fail("requested lines are too large; request fewer lines")
       }
@@ -603,6 +612,7 @@ fn control_sync(
           "query": query,
           "mode": "literal",
           "limit": num(limit),
+          "prefix": json_text(args, "prefix").unwrap_or(""),
           "overlays": overlays(),
         },
         result => {

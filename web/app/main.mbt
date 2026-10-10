@@ -42,8 +42,19 @@ fn replay_deferred() -> Unit {
 let scrolled_tab : Ref[String] = Ref("")
 
 ///|
+fn narrow_layout() -> Bool {
+  js_viewport_width() <= 900.0
+}
+
+///|
+let was_narrow : Ref[Bool] = Ref(false)
+
+///|
 /// Called once the page loads, with the server session.
 pub fn boot(config : String) -> Unit {
+  was_narrow.val = narrow_layout()
+  reader.sidebar = !was_narrow.val
+  reader.wrap = was_narrow.val
   let parsed = @json.parse(config) catch { _ => Json::null() }
   match parsed {
     { "workspace": summary, "control_socket": String(socket), .. } => {
@@ -270,7 +281,14 @@ fn handle_event(kind : String, args : Json) -> Bool {
       }
       false
     }
-    "resize" => false
+    "resize" => {
+      let narrow = narrow_layout()
+      if narrow && !was_narrow.val {
+        reader.sidebar = false
+      }
+      was_narrow.val = narrow
+      false
+    }
     "window-focus" => {
       if reader.overview_visible {
         refresh_disk_cache()
@@ -386,7 +404,7 @@ fn on_action(act : String, arg : String) -> Unit {
     "search-prev" => search_step(false)
     "search-close" => {
       reader.search_open = false
-      focus_editor()
+      focus_document()
     }
     "refresh-pinned" =>
       if reader.pinned is Some(p) {
@@ -582,14 +600,10 @@ fn render() -> Unit {
   js_set_html("topbar", render_topbar())
   js_set_html("menu-layer", render_menu())
   show_region("sidebar", reader.sidebar)
+  js_set_class("app", "sidebar-open", reader.sidebar)
   js_set_style("sidebar", "width", px(reader.sidebar_width))
   js_set_html("sidebar-head", render_sidebar_head())
-  if reader.reading_path {
-    js_set_html("tree-scroll", render_reading_path())
-  } else {
-    js_set_html("tree-scroll", render_tree())
-  }
-  js_set_html("sidebar-foot", render_sidebar_foot())
+  js_set_html("tree-scroll", render_tree())
   js_set_html("tabs", render_tabs())
   // Main column: overview, or path bar + navigation bar + editor/diff.
   show_region("overview", reader.overview_visible)

@@ -87,10 +87,32 @@ fn anchor_range(
   }
   let start = @core.offset_at(source, line, column)
   let end = start + expected.length()
-  if end > source.length() || @core.slice(source, start, end) != expected {
-    fail("source changed or expected_text does not match")
+  if end <= source.length() && @core.slice(source, start, end) == expected {
+    return (source, start, end)
   }
-  (source, start, end)
+  // AI clients often miscount the column. When the text starts exactly once on
+  // this line, the line is the anchor and the column is corrected.
+  let line_start = @core.offset_at(source, line, 1)
+  let line_end = match @core.find_from(source, "\n", line_start) {
+    -1 => source.length()
+    i => i
+  }
+  let first = @core.find_from(source, expected, line_start)
+  if first >= 0 && first <= line_end {
+    let second = @core.find_from(source, expected, first + 1)
+    if second < 0 || second > line_end {
+      return (source, first, first + expected.length())
+    }
+  }
+  // Lines shift while a file is edited; a text that is unique in the file
+  // still names one place.
+  let all = @core.find_all(source, expected)
+  if all.length() == 1 {
+    return (source, all[0], all[0] + expected.length())
+  }
+  fail(
+    "\{path}:\{line}: source changed or expected_text does not match (expected \{@core.take_chars(expected, 60)})",
+  )
 }
 
 ///|
@@ -240,7 +262,11 @@ fn prepare_steps(args : Json, allow_empty : Bool) -> Array[Guide] raise Failure 
   }
   let prepared = []
   for s in steps {
-    prepared.push(prepare_guide(s))
+    let step = prepare_guide(s) catch {
+      Failure(message) =>
+        fail("step \{json_text(s, "id").unwrap_or("?")}: \{message}")
+    }
+    prepared.push(step)
   }
   let ids : Map[String, Unit] = Map([])
   for step in prepared {
@@ -467,23 +493,99 @@ fn open_range(
 }
 
 ///|
+/// The current text and anchor of a snapshot: unchanged, or moved when the
+/// anchored text now appears exactly once in the edited file. None when the
+/// file is unknown or the text is gone or ambiguous.
+fn relocate(
+  path : String,
+  source : String,
+  start : Int,
+  end : Int,
+) -> (String, Int, Int)? {
+  guard known_text(path) is Some(text) else { return None }
+  if text == source {
+    return Some((text, start, end))
+  }
+  let expected = @core.slice(source, start, end)
+  if expected == "" {
+    return None
+  }
+  let all = @core.find_all(text, expected)
+  if all.length() == 1 {
+    Some((text, all[0], all[0] + expected.length()))
+  } else {
+    None
+  }
+}
+
+///|
+/// Follow edits around a step's code. False when the step is stale.
+fn refresh_guide_anchor(g : Guide) -> Bool {
+  match relocate(g.path, g.source, g.start, g.end) {
+    Some((text, start, end)) => {
+      g.source = text
+      g.start = start
+      g.end = end
+      true
+    }
+    None => false
+  }
+}
+
+///|
+fn refresh_evidence_anchor(ev : Evidence) -> Bool {
+  match relocate(ev.path, ev.source, ev.start, ev.end) {
+    Some((text, start, end)) => {
+      ev.source = text
+      ev.start = start
+      ev.end = end
+      true
+    }
+    None => false
+  }
+}
+
+///|
+/// True while a tour step opens its file, so `open` keeps the tab as the tour's.
+let guide_opening : Ref[Bool] = Ref(false)
+
+///|
 fn activate_guide(guide : Guide, then : (Result[Unit, String]) -> Unit) -> Unit {
+  guide_opening.val = false
   if reader.dialog is Some(_) || reader.pending is Some(_) {
     then(Err("finish the editor dialog first"))
     return
   }
-  let text = control_text(guide.path) catch { _ => "\u{0}" }
-  if reader.workspace.root != guide.root || text != guide.source {
+  if reader.workspace.root != guide.root || !refresh_guide_anchor(guide) {
     then(Err("source changed; regenerate the guide before navigating"))
     return
   }
   let previous = reader.guide
   reader.guide = None
+  let existed = reader.tabs.contains(guide.path)
+  guide_opening.val = true
   open_range(guide.path, guide.source, guide.start, guide.end, true, () => {
+    guide_opening.val = false
     if reader.selected != Some(guide.path) {
       reader.guide = previous
       then(Err("editor could not open the file"))
       return
+    }
+    // A route through many files should not leave one tab per step: the tab
+    // of the previous step goes away unless the reader edited it or opened it
+    // themselves.
+    if !existed && !reader.tour_tabs.contains(guide.path) {
+      reader.tour_tabs.push(guide.path)
+    }
+    for p in reader.tour_tabs.copy() {
+      if p != guide.path && !is_dirty(p) {
+        if reader.tabs.search(p) is Some(i) {
+          reader.tabs.remove(i) |> ignore
+        }
+        if reader.tour_tabs.search(p) is Some(j) {
+          reader.tour_tabs.remove(j) |> ignore
+        }
+      }
     }
     reader.overview_visible = false
     reader.compare = false
@@ -517,7 +619,10 @@ fn guide_step(direction : Int, gate? : Bool = true) -> Unit {
     return
   }
   if next >= tour.steps.length() {
+    // Finishing returns to the overview, where the chapters stay reachable;
+    // a tour without one simply closes.
     guide_response("end")
+    show_overview()
     return
   }
   let target = tour.steps[next].copy()
@@ -674,7 +779,7 @@ fn validate_guide() -> Unit {
       reader.workspace.root != guide.root ||
       reader.selected != Some(guide.path) ||
       (match current_editor() {
-        Some(e) => e.text != guide.source
+        Some(_) => !refresh_guide_anchor(guide)
         None => true
       })
     None => false
@@ -722,7 +827,7 @@ fn guide_steps_stale(tour : Tour) -> Bool {
   .iter()
   .any(g => {
     match known_text(g.path) {
-      Some(text) => text != g.source
+      Some(_) => !refresh_guide_anchor(g)
       None => reader.disk_cache.contains(g.path)
     }
   })
@@ -831,7 +936,7 @@ fn evidence_at(overview : Overview, index : Int) -> Evidence? {
 ///|
 fn evidence_stale(ev : Evidence) -> Bool {
   match known_text(ev.path) {
-    Some(text) => text != ev.source
+    Some(_) => !refresh_evidence_anchor(ev)
     None => reader.disk_cache.contains(ev.path)
   }
 }
@@ -851,8 +956,7 @@ fn open_evidence(arg : String) -> Unit {
   }
   let root = tour.steps[0].root
   load_texts([ev.path], () => {
-    let text = control_text(ev.path) catch { _ => "\u{0}" }
-    if reader.workspace.root != root || text != ev.source {
+    if reader.workspace.root != root || !refresh_evidence_anchor(ev) {
       say("ソースが変更されています。このガイドを更新してください。")
       return
     }

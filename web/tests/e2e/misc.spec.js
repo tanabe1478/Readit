@@ -31,20 +31,6 @@ test('save all writes every dirty tab', async ({ page, readit }) => {
   expect(fs.readFileSync(path.join(readit.project, 'src/app.py'), 'utf8')).toBe('import os.path\nNEEDLE = 1\n');
 });
 
-test('reading path lists opened files with their provisional roles', async ({ page }) => {
-  await openFolders(page, 'tests', 'src');
-  await page.locator('.tree-row[data-tree="tests/test_app.py"]').click();
-  await page.locator('.tree-row[data-tree="src/app.py"]').click();
-  await page.locator('button[data-act="toggle-reading"]').click();
-  await expect(page.locator('.route')).toHaveCount(3);
-  // Opened order, labelled by the file-name heuristic, as in the native app.
-  await expect(page.locator('.route').nth(0)).toContainText('01 · 背景docs/guide.md');
-  await expect(page.locator('.route').nth(1)).toContainText('02 · 検証tests/test_app.py');
-  await expect(page.locator('.route').nth(2)).toContainText('03 · 実装src/app.py');
-  await page.locator('button[data-act="toggle-reading"]').click();
-  await expect(page.locator('.tree-row').first()).toBeVisible();
-});
-
 test('menus, zoom, help and sidebar resizing', async ({ page, readit }) => {
   await page.locator('.menu-title', { hasText: '表示' }).click();
   await page.locator('.menu-item', { hasText: '拡大' }).click();

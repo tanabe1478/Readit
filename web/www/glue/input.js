@@ -2,6 +2,7 @@
 // the server's control stream. Everything is forwarded to the app as events.
 import { $, token, send, wasm } from './bridge.js';
 import { editorHit } from './hit.js';
+import { placeInput } from './dom.js';
 import { leaving } from './server.js';
 
 const shifted = { '{': '[', '}': ']', '_': '-', '+': '=', ')': '0', '!': '1' };
@@ -60,9 +61,9 @@ export function wire() {
   window.addEventListener('keyup', (e) => { if (e.key === 'Meta') send('modifiers', { meta: false }); }, true);
 
   const input = $('editor-input');
-  input.addEventListener('compositionstart', () => { composing = true; input.classList.add('composing'); });
+  input.addEventListener('compositionstart', () => { composing = true; input.classList.add('composing'); placeInput(); });
   input.addEventListener('compositionend', (e) => {
-    composing = false; input.classList.remove('composing');
+    composing = false; input.classList.remove('composing'); placeInput();
     const text = e.data || input.value; input.value = '';
     if (text) send('text', { text });
   });
@@ -174,6 +175,7 @@ export function wire() {
     frames.set(id, requestAnimationFrame(() => { frames.delete(id); send('scroll', { id }); }));
   }, true);
   window.addEventListener('resize', () => send('resize', {}));
+  window.visualViewport?.addEventListener('resize', () => send('resize', {}));
   window.addEventListener('focus', () => send('window-focus', {}));
   window.addEventListener('beforeunload', (e) => {
     if (leaving() && wasm.exports && wasm.exports.has_unsaved()) { e.preventDefault(); e.returnValue = ''; }

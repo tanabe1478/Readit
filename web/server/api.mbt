@@ -325,7 +325,13 @@ fn Server::dispatch(
           }
         }
       }
-      search(ws, query, literal, limit, overlays, result => reply(Ok(result)))
+      let prefix = match field(args, "prefix") {
+        Some(String(p)) => p
+        _ => ""
+      }
+      search(ws, query, literal, limit, overlays, prefix, result => reply(
+        Ok(result),
+      ))
       None
     }
     "lsp.query" => {
@@ -427,6 +433,7 @@ fn search(
   literal : Bool,
   limit : Int,
   overlays : Map[String, String],
+  prefix : String,
   done : (Json) -> Unit,
 ) -> Unit {
   let matches = []
@@ -437,6 +444,9 @@ fn search(
   }
   let needle = if literal { query } else { @core.lower(query) }
   ws.scan(overlays, (path, text) => {
+    if prefix != "" && !@core.starts_with(path, prefix) {
+      return true
+    }
     for index, line in @core.lines(text) {
       if literal {
         for column in @core.find_all(line, needle) {

@@ -130,7 +130,14 @@ fn open(
     if !reader.tabs.contains(path) {
       reader.tabs.push(path)
     }
+    if !guide_opening.val && reader.tour_tabs.search(path) is Some(i) {
+      // The reader chose this file; its tab now outlives the tour's steps.
+      reader.tour_tabs.remove(i) |> ignore
+    }
     reader.selected = Some(path)
+    if narrow_layout() {
+      reader.sidebar = false
+    }
     reader.tree_target = Some(path)
     reveal_in_tree(path)
     reader.compare = false
@@ -145,7 +152,7 @@ fn open(
       }
       None => restore_scroll(doc.scroll_top)
     }
-    focus_editor()
+    focus_document()
     if record {
       while reader.history.length() > reader.history_index + 1 {
         reader.history.pop() |> ignore
@@ -167,6 +174,16 @@ fn open(
 ///|
 fn focus_editor() -> Unit {
   reader.focus = "editor"
+}
+
+///|
+// Reading code or closing a dialog should not summon a phone keyboard.
+fn focus_document() -> Unit {
+  if narrow_layout() {
+    reader.focus = "body"
+  } else {
+    focus_editor()
+  }
 }
 
 ///|
@@ -216,7 +233,7 @@ fn dismiss() -> Unit {
   reader.rename_source = None
   reader.menu = None
   reader.context_menu = None
-  focus_editor()
+  focus_document()
 }
 
 ///|
@@ -228,7 +245,7 @@ fn new_file() -> Unit {
   let path = "Untitled-\{n}"
   reader.workspace.documents.push(new_document(path, "", None))
   reader.untitled[path] = ()
-  open(path, None, true)
+  open(path, None, true, then=() => focus_editor())
 }
 
 ///|

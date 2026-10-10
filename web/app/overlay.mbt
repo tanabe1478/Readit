@@ -11,6 +11,7 @@ fn guide_placement(
   vh : Double,
   height : Double,
   manual : (Double, Double)?,
+  beside? : Double = 0.0,
 ) -> (Double, Double, Double, Double) {
   let margin = 12.0
   let width = 430.0.min((vw - margin * 2.0).max(1.0))
@@ -24,14 +25,34 @@ fn guide_placement(
       height,
     )
   }
+  // Beside the code first, so the lines after the annotation stay readable:
+  // to the right of the annotation and of the code block that follows it.
+  let beside = anchor.right().max(beside) + 16.0
+  if beside + width + margin <= vw {
+    let top = anchor.top.max(margin)
+    return (beside, top, width, height.min((vh - margin - top).max(1.0)))
+  }
   let above = (anchor.top - margin - 8.0).max(0.0)
   let below = (vh - margin - anchor.bottom() - 8.0).max(0.0)
   if below >= height || below >= above {
-    (left, anchor.bottom() + 8.0, width, height.min(below))
+    // Bottom right, so the lines right after the annotation stay visible.
+    let h = height.min(below - 28.0).max(1.0)
+    ((vw - width - margin).max(margin), vh - margin - 28.0 - h, width, h)
   } else {
     let h = height.min(above)
     (left, anchor.top - 8.0 - h, width, h)
   }
+}
+
+///|
+/// Right edge of the code the reader looks at next: the annotated lines and
+/// the dozen visible lines after them.
+fn guide_block_right(guide : Guide) -> Double {
+  guard current_editor() is Some(ed) else { return 0.0 }
+  guard viewport_lines() is Some((first, last)) else { return 0.0 }
+  let a = ed.line_of(guide.start.max(ed.line_start(first - 1)))
+  let b = ed.line_of(@core.prev_char(ed.text, guide.end.min(ed.line_end(last - 1))))
+  js_rows_right("editor", a, (b + 12).min(last - 1))
 }
 
 ///|
@@ -131,9 +152,12 @@ fn render_guide() -> GuideView? {
     vh,
     preferred,
     guide.position,
+    beside=guide_block_right(guide),
   )
   let max_height = if guide.position is Some(_) {
     (vh - 24.0).max(1.0)
+  } else if left >= anchor.right() {
+    (vh - top - 20.0).max(1.0)
   } else if top >= anchor.bottom() {
     (vh - anchor.bottom() - 20.0).max(1.0)
   } else {
@@ -212,7 +236,11 @@ fn render_guide() -> GuideView? {
     )
   }
   if guide.pending_question is Some(_) {
-    out.write_string(caption("回答を待っています…"))
+    out.write_string(
+      caption(
+        "回答を待っています… AIが接続していなければ、チャットで質問への対応を依頼してください。",
+      ),
+    )
   }
   if guide.answer is Some(a) {
     out.write_string("<div class=\"guide-answer\">\{e(a)}</div>")

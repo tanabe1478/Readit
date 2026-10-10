@@ -17,7 +17,7 @@ When the code to read is outside the opened folder, such as a sibling repository
 
 ## Walk through the source
 
-- Inspect current text with `readit_read`; it includes unsaved edits. Find candidate files with `readit_files` and literal matches with `readit_search`.
+- Inspect current text with `readit_read`; it includes unsaved edits. Pass `numbered: true` when you will anchor steps or evidence to what you read, so line numbers come from the tool instead of counting. Find candidate files with `readit_files` and literal matches with `readit_search`; its `prefix` (for example `web/app/`) keeps old or unrelated trees out of the results.
 - Use `readit_open` to show a useful, small range before explaining it. Coordinates are one-based UTF-16. `end_line` and `end_column` describe an exclusive endpoint. Selection leaves the caret at the start, which is also the position used by symbol queries.
 - Resolve definitions, references, types, implementations or document symbols with `readit_symbol`. Use returned paths and positions instead of guessing. Literal search matches are not semantic references. Language-server information is not an AI explanation.
 - `readit_symbol` shows results in the normal results panel by default. Use `show: false` for background inspection. Open a returned target with `readit_open`; external definition files are read-only.
@@ -35,20 +35,20 @@ For a walkthrough, read the relevant sources and prepare the complete route befo
 
 Readit owns Next/Back and completes the last step locally. Its `step` events are informational: do not generate or push another step in response. The loaded route works even after the AI stops running. `readit_state.guide_tour` provides its id, current index, total steps, visited_through, and step ids/titles; indexes are zero-based.
 
-For questions, poll `readit_guide_events` while actively available. A `question` event contains the actual question, source, explanation and previous Q&A. Read the relevant source and prepare an answer plus a revised route for the unread portion. Re-read state/events before submitting `readit_guide_revise(workspace, id, event_sequence, question_sequence, answer, steps)`. Here `id` is the tour id, and `steps` replaces everything after `visited_through`, not after the question's location. Visited explanations, current position and the question/answer are retained. An empty steps list ends the route after visited history. Navigation during generation makes the event sequence stale; re-read state and adjust the unread suffix before retrying. Existing steps remain usable while generating. Do not use `readit_guide_load` to handle a question, since it restarts history.
+For questions, poll `readit_guide_events` while actively available. A `question` event contains the actual question, source, explanation and previous Q&A. Read the relevant source and answer the question. Most questions are answered in place with `readit_guide_answer(workspace, id, question_sequence, body)`, where `id` is the step id from the event: the prepared steps stay as they are. Use `readit_guide_revise(workspace, id, event_sequence, question_sequence, answer, steps)` only when the question shows that the unread route itself should change; re-read state/events before submitting it. Here `id` is the tour id, and `steps` replaces everything after `visited_through`, not after the question's location. Visited explanations, current position and the question/answer are retained. An empty steps list ends the route after visited history. Navigation during generation makes the event sequence stale; re-read state and adjust the unread suffix before retrying. Existing steps remain usable while generating. Do not use `readit_guide_load` to handle a question, since it restarts history.
 
 ## Receive questions without being told
 
 The user should not have to announce in the chat that they sent a question. While you are available after loading a tour or showing a bubble, keep one waiter running for the window:
 
-- Clients that run a command in the background and resume you when it exits (Claude Code: Bash with `run_in_background`): start `python3 <Readit>/tools/readit_wait.py --socket <control_socket> --stop-when-idle` in the background, with `control_socket` from `readit_state`, so you wait for this session's window only. `<Readit>` is the repository that provides `tools/readit_mcp.py`. Never run it in the foreground, which would block the conversation. When it exits it prints one JSON line:
-  - `question`: answer it (`readit_guide_revise` for a tour, `readit_guide_answer` for a single bubble), then start the waiter again with `--after <latest_sequence>`.
+- Clients that run a command in the background and resume you when it exits (Claude Code: Bash with `run_in_background`): run the `wait_command` that `readit_state` returns, exactly as given, in the background. It is `python3 <Readit>/tools/readit_wait.py --socket <control_socket> --stop-when-idle` for this session's window only. Never run it in the foreground, which would block the conversation. When it exits it prints one JSON line:
+  - `question`: answer it (`readit_guide_answer`, or `readit_guide_revise` when the remaining route must change), then start the waiter again with `--after <latest_sequence>`.
   - `next`: continue a single-bubble walkthrough, then restart it the same way.
   - `timeout`: restart it with the same `--after`.
   - `ended` or `truncated`: stop waiting. After `truncated`, read `readit_state` before acting.
 - pi with the Readit package (`integrations/pi`): the package already waits for the whole session and sends each question to you as a user message. Do not start another waiter. `/readit-watch off` stops it.
 
-Tell the user once that questions arrive automatically while this session is open.
+Tell the user once that questions arrive automatically while this session is open. In a one-shot run that ends after this response (for example `claude -p`), there is nobody to wake: skip the waiter and tell the user to ask in a new run when they have sent a question.
 
 On end, interrupted, cleared, truncated events or workspace change, stop and do not resurrect the guide without a user request. Source changes reject stale explanations. Do not promise question answering while no AI is running: prepared navigation is local, but new answers and regeneration require a connected active AI.
 

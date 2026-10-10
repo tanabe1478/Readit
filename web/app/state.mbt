@@ -192,9 +192,10 @@ priv struct Guide {
   id : String
   root : String
   path : String
-  source : String
-  start : Int
-  end : Int
+  /// The file text the anchor was checked against; moves with unique edits.
+  mut source : String
+  mut start : Int
+  mut end : Int
   title : String
   body : String
   /// explanation, hypothesis, prediction or verification.
@@ -232,9 +233,9 @@ priv struct Chapter {
 priv struct Evidence {
   label : String
   path : String
-  source : String
-  start : Int
-  end : Int
+  mut source : String
+  mut start : Int
+  mut end : Int
 }
 
 ///|
@@ -426,6 +427,8 @@ priv struct Reader {
   mut selected : String?
   untitled : Map[String, Unit]
   closed : Array[String]
+  /// Tabs a tour opened for its steps; closed again as the route moves on.
+  tour_tabs : Array[String]
   mut dialog : Dialog?
   mut pending : Pending?
   mut save_source : String?
@@ -437,7 +440,6 @@ priv struct Reader {
   /// Folders open in the tree. Folders start closed.
   expanded : Map[String, Unit]
   mut tree_target : String?
-  mut reading_path : Bool
   mut sidebar : Bool
   mut sidebar_width : Double
   mut sidebar_drag : (Double, Double)?
@@ -500,6 +502,9 @@ fn empty_workspace() -> Workspace {
 }
 
 ///|
+let default_status : String = "⌘P ファイルを開く · ⌘S 保存 · ⇧⌘P コマンド"
+
+///|
 let reader : Reader = {
   pinned: None,
   guide: None,
@@ -527,6 +532,7 @@ let reader : Reader = {
   selected: None,
   untitled: Map([]),
   closed: [],
+  tour_tabs: [],
   dialog: None,
   pending: None,
   save_source: None,
@@ -537,7 +543,6 @@ let reader : Reader = {
   replacement: "",
   expanded: Map([]),
   tree_target: None,
-  reading_path: false,
   sidebar: true,
   sidebar_width: 245.0,
   sidebar_drag: None,
@@ -545,7 +550,7 @@ let reader : Reader = {
   font_size: 14.0,
   compare: false,
   diff_rows: [],
-  message: "⌘P ファイルを開く · ⌘S 保存 · ⇧⌘P コマンド",
+  message: default_status,
   history: [],
   history_index: 0,
   focus: "editor",

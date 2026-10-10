@@ -14,7 +14,8 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 var(--ui); overflow: hidden; }
-#app { height: 100vh; display: flex; flex-direction: column; outline: none; position: relative; }
+#app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; outline: none; position: relative; }
+.mobile-only, #sidebar-backdrop { display: none; }
 button { font: inherit; color: inherit; }
 .caption { font-size: 11px; color: var(--muted); white-space: pre-wrap; }
 .btn { flex-shrink: 0; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; font-size: 12px; cursor: pointer; white-space: nowrap; }
@@ -58,9 +59,6 @@ textarea.input { resize: vertical; }
 .tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 .brand .label { font-size: 11px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--accent); color: var(--accent); }
 .badge { flex-shrink: 0; color: var(--accent); font-size: 11px; }
-.route { margin: 4px 8px; padding: 10px; border-radius: 6px; cursor: pointer; }
-.route:hover { background: #233a32; }
-#sidebar-foot { flex-shrink: 0; padding: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
 #center { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #tabs { height: 40px; flex-shrink: 0; display: flex; overflow-x: auto; background: var(--panel); border-bottom: 1px solid var(--border); scrollbar-width: thin; }
 .tab { height: 100%; flex-shrink: 0; min-width: 130px; display: flex; align-items: center; gap: 8px; padding: 0 4px 0 12px; border-right: 1px solid var(--border); border-top: 2px solid var(--panel); cursor: pointer; font-size: 12px; }
@@ -156,7 +154,8 @@ textarea.input { resize: vertical; }
 .card.current { border-color: var(--accent); }
 .chapter-head { display: flex; justify-content: space-between; gap: 12px; }
 .chapter .btn { align-self: flex-start; }
-.file-label { font-size: 11px; color: var(--muted); }
+.file-label { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.relations { font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-x: auto; }
 .badge { align-self: flex-start; font-size: 11px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--border); }
 .badge.confirmed { color: #8fd18f; border-color: #8fd18f; }
 .badge.inferred { color: #e0b46c; border-color: #e0b46c; }
@@ -220,3 +219,89 @@ textarea.input { resize: vertical; }
 #fatal { display: none; position: fixed; left: 16px; right: 16px; bottom: 40px; z-index: 100; padding: 12px; background: #4a1f28; border: 1px solid #eba9b4; border-radius: 8px; white-space: pre-wrap; font: 12px var(--mono); }
 .closed { padding: 40px; font-size: 16px; }
 .snippet-line { white-space: pre; min-height: 1.5em; }
+
+/* Narrow screens use one editor column, not a scaled-down desktop layout.
+   Keep this breakpoint aligned with narrow_layout() in app/main.mbt. */
+@media (max-width: 900px) {
+  .mobile-only { display: inline-flex; align-items: center; justify-content: center; }
+  .btn, .menu-title { min-height: 44px; min-width: 44px; touch-action: manipulation; }
+  .btn { padding: 6px 10px; }
+  #topbar { position: relative; z-index: 17; height: auto; padding: 4px 8px; gap: 4px 8px; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; }
+  #topbar > .mobile-only { grid-column: 1; grid-row: 1; }
+  .brand { grid-column: 2; grid-row: 1; min-width: 0; gap: 6px; overflow: hidden; }
+  .logo { font-size: 14px; }
+  .brand .caption, .brand .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .top-actions { grid-column: 3; grid-row: 1; gap: 4px; }
+  .top-actions [data-act="open-folder"] { display: none; }
+  .top-actions [data-act="overview"] { max-width: 76px; overflow: hidden; text-overflow: ellipsis; }
+  .menubar { grid-column: 1 / -1; grid-row: 2; min-width: 0; overflow-x: auto; }
+  .menu-title { flex: 1; padding: 4px 8px; white-space: nowrap; }
+  #menu-layer .menu-list { top: 101px; left: 8px !important; right: 8px; min-width: 0; max-height: calc(100dvh - 109px); overflow-y: auto; }
+  #context-layer .menu-list { top: auto !important; bottom: 36px; left: 8px !important; right: 8px; min-width: 0; max-height: calc(100dvh - 48px); overflow-y: auto; }
+  .menu-item { min-height: 44px; align-items: center; gap: 12px; }
+  .menu-item > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+  #main { position: relative; min-width: 0; flex-direction: column; }
+  #center { width: 100%; min-height: 0; }
+  #sidebar { position: absolute; inset: 0 auto 0 0; z-index: 16; width: min(86%, 360px) !important; max-width: 100%; box-shadow: 8px 0 24px #0008; }
+  .sidebar-open #sidebar-backdrop { display: block; position: absolute; inset: 0; z-index: 15; border: 0; padding: 0; background: #0008; }
+  #sidebar-resize { display: none; }
+  .explorer-head { padding: 8px; gap: 4px; }
+  .explorer-head .row-buttons { flex-wrap: nowrap; gap: 4px; }
+  .tree-row { height: 44px; touch-action: manipulation; }
+    #tabs { height: 44px; }
+  .tab-close { width: 44px; height: 40px; }
+  #pathbar { min-height: 48px; padding: 2px 8px; gap: 8px; }
+  #pathbar .row-buttons { flex-wrap: nowrap; gap: 4px; }
+  #navbar { height: 48px; padding: 2px 8px; gap: 4px; scrollbar-width: thin; }
+  #navbar .btn { padding: 4px 10px; }
+  #search-bar { left: 8px; right: 8px; width: auto; flex-wrap: wrap; }
+  #search-input { min-height: 44px; font-size: 16px; }
+  #search-controls { width: 100%; justify-content: flex-end; }
+  #search-controls .btn { min-height: 40px; }
+  #pinned { width: 100%; min-width: 0; flex: 0 0 38%; min-height: 0; max-height: 40dvh; border-left: 0; border-top: 1px solid var(--border); overflow: auto; }
+  #pinned-scroll { min-height: 60px; }
+  #pinned-head { flex-shrink: 0; }
+  .pinned-title { min-height: 44px; height: auto; padding: 4px 8px; }
+  .pinned-path, .pinned-state { padding: 4px 8px; }
+  #navpanel { height: min(194px, 30dvh); }
+  .nav-head { height: 44px; padding: 0 8px; }
+  #status { height: 28px; padding: 0 8px; gap: 8px; }
+  #status .caption { min-width: 0; flex: 1; font-size: 10px; }
+  #dialog { margin-top: 8px; width: calc(100vw - 16px); max-width: none; max-height: calc(100dvh - 16px); }
+  #dialog-shell { flex-shrink: 0; }
+  #dialog-body { overflow-y: auto; }
+  .dialog-title { padding: 12px; gap: 8px; align-items: flex-start; }
+  .dialog-title > span { min-width: 0; overflow-wrap: anywhere; }
+  .input { font-size: 16px; min-height: 44px; }
+  .pick { min-height: 44px; padding: 10px 12px; }
+  .pick-label, .pick .caption { overflow-wrap: anywhere; }
+  .confirm { padding: 16px; }
+  .confirm pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  #overview { padding: 12px; }
+  .overview h1 { font-size: 20px; }
+  .card { padding: 12px; overflow-wrap: anywhere; }
+  .chapter-head { flex-wrap: wrap; }
+  #guide { left: 8px !important; right: 8px; top: auto !important; bottom: 36px; width: auto !important; max-height: 50dvh; }
+  .guide-handle { cursor: default; }
+  .guide-body, .guide-answer, .guide-prompt { overflow-wrap: anywhere; }
+  .pointer { left: 8px !important; right: 8px; width: auto !important; max-height: 50dvh; overflow-y: auto; }
+  .pointer .row-buttons { flex-wrap: wrap; }
+  #editor-input.composing { max-width: calc(100vw - 16px); }
+}
+
+/* A phone keyboard leaves little vertical space. Keep search controls above
+   the status bar while retaining the file/tree and command buttons. */
+@media (max-width: 599px) and (max-height: 480px) {
+  /* Focus changes on pointer-down. Do not move controls before pointer-up. */
+  #topbar .menubar, #navbar { display: none; }
+}
+
+/* Landscape phones have enough horizontal room for a single header row. */
+@media (min-width: 600px) and (max-width: 900px) {
+  #topbar { height: 54px; display: flex; }
+  #topbar > .mobile-only { order: 0; }
+  .menubar { order: 1; flex: 1; }
+  .brand { display: none; }
+  .top-actions { order: 2; }
+  #menu-layer .menu-list { top: 54px; max-height: calc(100dvh - 62px); }
+}
