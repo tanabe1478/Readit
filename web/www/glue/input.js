@@ -67,6 +67,19 @@ export function wire() {
     const text = e.data || input.value; input.value = '';
     if (text) send('text', { text });
   });
+  // Android soft keyboards can report keydown=229 even for deletion. The
+  // textarea is only an insertion buffer (normally empty), so deleting its
+  // value cannot delete the editor selection/cursor. Route the intent instead.
+  // Do not intercept deletion of the IME's active preedit text.
+  input.addEventListener('beforeinput', (e) => {
+    if (composing || e.isComposing) return;
+    const desc = e.inputType === 'deleteContentBackward' ? 'backspace'
+      : e.inputType === 'deleteContentForward' ? 'delete' : null;
+    if (desc && send('key', { desc, target: 'editor' })) {
+      e.preventDefault();
+      input.value = '';
+    }
+  });
   input.addEventListener('input', (e) => {
     if (composing || e.isComposing) return;
     const text = input.value; input.value = '';

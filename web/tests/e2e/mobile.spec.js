@@ -1,8 +1,11 @@
-import { test, expect, ok } from './fixture.js';
+import { test, expect, ok, lineText } from './fixture.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const files = {
   'README.md': '# Mobile\n' + 'Long lines should wrap rather than push the editor off screen. '.repeat(16) + '\n',
   'src/sample.js': 'const value = 42;\n'.repeat(80),
+  'edit.txt': '日本語ABC\n',
   ['a-very-long-file-name-'.repeat(8) + '.md']: '# Long filename\n',
 };
 async function insideViewport(page, locator) {
@@ -81,6 +84,82 @@ test.describe('phone layout and touch interaction', () => {
     await input.dispatchEvent('compositionstart', { data: '' });
     await insideViewport(page, input);
     await input.dispatchEvent('compositionend', { data: '' });
+  });
+
+  // Synthetic Android-style event sequence, not evidence of real IME conversion.
+  // Unlike the layout tests, assert the wasm editor text AND saved file bytes.
+  test('229 deletion intents edit the document and save through the touch menu', async ({ page, readit }) => {
+    const input = page.locator('#editor-input');
+    for (const step of [
+      { column: 5, inputType: 'deleteContentBackward', text: '日本語BC' },
+      { column: 4, inputType: 'deleteContentForward', text: '日本語C' },
+      { column: 1, end_column: 4, inputType: 'deleteContentBackward', text: 'C' },
+    ]) {
+      await ok(readit.socketPath, 'readit_open', {
+        workspace: readit.project, path: 'edit.txt', line: 1, column: step.column,
+        ...(step.end_column ? { end_line: 1, end_column: step.end_column } : {}),
+      });
+      await input.focus();
+      await input.dispatchEvent('keydown', { key: 'Unidentified', code: '', keyCode: 229 });
+      // Playwright dispatchEvent falls back to Event for beforeinput, which
+      // drops InputEventInit.inputType. Construct the actual interface explicitly.
+      const deletion = await input.evaluate((el, inputType) => {
+        const event = new InputEvent('beforeinput', {
+          inputType, bubbles: true, cancelable: true, composed: true, isComposing: false,
+        });
+        el.dispatchEvent(event);
+        return { isInputEvent: event instanceof InputEvent, inputType: event.inputType,
+          prevented: event.defaultPrevented };
+      }, step.inputType);
+      expect(deletion).toEqual({ isInputEvent: true, inputType: step.inputType, prevented: true });
+      await expect.poll(() => lineText(page, 0)).toBe(step.text);
+      expect(fs.readFileSync(path.join(readit.project, 'edit.txt'), 'utf8')).toBe('日本語ABC\n');
+    }
+    await page.getByRole('button', { name: 'ファイル', exact: true }).tap();
+    await page.locator('.menu-item[data-arg="save"]').tap();
+    await expect.poll(() => fs.readFileSync(path.join(readit.project, 'edit.txt'), 'utf8')).toBe('C\n');
+  });
+
+  test('keyboard-height editing keeps menus reachable and saves exact bytes', async ({ page, readit }) => {
+    await page.setViewportSize({ width: 360, height: 355 });
+    await ok(readit.socketPath, 'readit_open', {
+      workspace: readit.project, path: 'edit.txt', line: 1, column: 5,
+    });
+    const input = page.locator('#editor-input');
+    await input.focus();
+    await input.dispatchEvent('keydown', { key: 'Unidentified', code: '', keyCode: 229 });
+    const prevented = await input.evaluate(el => {
+      const event = new InputEvent('beforeinput', {
+        inputType: 'deleteContentBackward', cancelable: true, bubbles: true,
+      });
+      el.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(prevented).toBe(true);
+    await expect.poll(() => lineText(page, 0)).toBe('日本語BC');
+    expect(fs.readFileSync(path.join(readit.project, 'edit.txt')).equals(Buffer.from('日本語ABC\n'))).toBe(true);
+    expect((await page.locator('#editor-scroll').boundingBox()).height).toBeGreaterThan(140);
+    for (const label of ['Readit', 'ファイル', '編集', '表示', '移動']) {
+      const menu = page.getByRole('button', { name: label, exact: true });
+      await expect(menu).toBeVisible();
+      await insideViewport(page, menu);
+      expect((await menu.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    }
+    await page.getByRole('button', { name: 'ファイル', exact: true }).tap();
+    const list = page.locator('#menu-layer .menu-list');
+    await insideViewport(page, list);
+    expect(await list.evaluate(el => getComputedStyle(el).overflowY)).toBe('auto');
+    expect(await list.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    const save = page.locator('.menu-item[data-arg="save"]');
+    await save.scrollIntoViewIfNeeded();
+    await insideViewport(page, save);
+    expect((await save.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    await save.tap();
+    await expect.poll(() => fs.readFileSync(path.join(readit.project, 'edit.txt')).equals(Buffer.from('日本語BC\n'))).toBe(true);
+    await expect.poll(() => page.evaluate(async () => {
+      const { wasm } = await import('/glue/bridge.js');
+      return !!wasm.exports.has_unsaved();
+    })).toBe(false);
   });
 
   test('search remains usable in a keyboard-height viewport', async ({ page }) => {

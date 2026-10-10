@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "baseline": "460b0c86e6aadc4fb3e6214f98a40cc2129ef124",
+  "compiledOn": "isolated macOS checkout, not Android",
+  "inputJSHash": "40f2092001c162e12cdf2df1750c9241d92abc6278b2ff2221cd1cec9f78cb81",
+  "verification": {
+    "moonTests": 28,
+    "wiringTests": 7,
+    "existingMobileE2EPassed": 16,
+    "newMobileE2EFailed": 2
+  },
+  "files": [
+    {
+      "path": "web/www/app.wasm",
+      "size": 268987,
+      "sha256": "51ee1ce96a819e991b9faea5b87fe1af1ea1935565a9f0786449c803fed68a38"
+    },
+    {
+      "path": "web/dist/server.js",
+      "size": 640533,
+      "sha256": "cbecfa48b91fa7af068aa50fb04f408720f3f69f561462652a3c797f8549652d"
+    },
+    {
+      "path": "web/www/vendor/tree-sitter.js",
+      "size": 150999,
+      "sha256": "d4fc466df6358055253bc4cdaab23cdf84fe00741fa5a4ff56506c06c533da42"
+    },
+    {
+      "path": "web/www/vendor/tree-sitter.wasm",
+      "size": 205488,
+      "sha256": "f38dcc4b43b818f9a0785bc1c6d5611a75ac4cdd428ff3f02757c34ca4e46d7f"
+    },
+    {
+      "path": "web/www/grammars/bash.scm",
+      "size": 577,
+      "sha256": "b74220d954f485b7626d2b2b61f37b522e12eb1830803e388e57dd797dc99f11"
+    },
+    {
+      "path": "web/www/grammars/bash.wasm",
+      "size": 1358224,
+      "sha256": "8292919c88a0f7d3fb31d0cd0253ca5a9531bc1ede82b0537f2c63dd8abe6a7a"
+    },
+    {
+      "path": "web/www/grammars/c.scm",
+      "size": 1432,
+      "sha256": "3378d854dda695b2b282b9468247524ed4271ef74af691033d2e36883379409c"
+    },
+    {
+      "path": "web/www/grammars/c.wasm",
+      "size": 625918,
+      "sha256": "c852c2a85ebf2beb636aa3b0ef7f7e70458684d74f6741b20dcb296885bed9f9"
+    },
+    {
+      "path": "web/www/grammars/cpp.scm",
+      "size": 939,
+      "sha256": "52136576a9a9dacd9e95a8de0f351689bf46140738572ab4e9f24c9278e6b458"
+    },
+    {
+      "path": "web/www/grammars/cpp.wasm",
+      "size": 3434931,
+      "sha256": "174eb0deb75b2ec7881bcacda9f995648d8e683956e5c2267e69ab6dc503fcbf"
+    },
+    {
+      "path": "web/www/grammars/css.scm",
+      "size": 1177,
+      "sha256": "23f7948a3817a0d06d7120158c3bee4ec5b58daa77e524985a4738b364db17b2"
+    },
+    {
+      "path": "web/www/grammars/css.wasm",
+      "size": 128668,
+      "sha256": "8a23977fe271357cce6f254ef88c9bebf3854602d8046605aef6a45c02135c59"
+    },
+    {
+      "path": "web/www/grammars/go.scm",
+      "size": 1421,
+      "sha256": "81182c986547eba7fa6316e82dfd621fb13b8fc89efac85432aee51a48ed0896"
+    },
+    {
+      "path": "web/www/grammars/go.wasm",
+      "size": 217182,
+      "sha256": "9504573f352b20be7f2f1911754d710622aedc15afff16d5ed8fb5645681aee7"
+    },
+    {
+      "path": "web/www/grammars/html.scm",
+      "size": 197,
+      "sha256": "1ebb3811a8cdc054385b847a3aac6fbf7079faefd5b3dfab5bbad256cd5afdcf"
+    },
+    {
+      "path": "web/www/grammars/html.wasm",
+      "size": 18385,
+      "sha256": "c48fcd82c7ea8bf943180088ba7f28c48b2bb5287874179168bf9d31e394cf85"
+    },
+    {
+      "path": "web/www/grammars/java.scm",
+      "size": 2064,
+      "sha256": "576c0df8df0b116cd642140ddc508c01f9d3283582afd8581c1f35caf4d71386"
+    },
+    {
+      "path": "web/www/grammars/java.wasm",
+      "size": 414641,
+      "sha256": "4fdeac4ca6ca089f06c6f7e562abcac1733cd465728cc7031ebb73c2019122c4"
+    },
+    {
+      "path": "web/www/grammars/javascript.scm",
+      "size": 2739,
+      "sha256": "d3630ae6dc9b2b27b230b5f8bb92b05cd491fb12bff353dae62a0a6d780461ee"
+    },
+    {
+      "path": "web/www/grammars/javascript.wasm",
+      "size": 411770,
+      "sha256": "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240"
+    },
+    {
+      "path": "web/www/grammars/json.scm",
+      "size": 172,
+      "sha256": "0511524465b56aed122580792254e68b6abbbfde7119f1d02b135acbe278233f"
+    },
+    {
+      "path": "web/www/grammars/json.wasm",
+      "size": 5596,
+      "sha256": "d2119fb98d5912719b13f9458574f8608d2d29dfbe45f6be1f860ea1fe2a2405"
+    },
+    {
+      "path": "web/www/grammars/markdown.scm",
+      "size": 787,
+      "sha256": "2eb06e766ccd672d49599d14f398f07f4f5f7f2208262993d3cd9207c1078e2f"
+    },
+    {
+      "path": "web/www/grammars/markdown.wasm",
+      "size": 421574,
+      "sha256": "dd9fc12ac2804d7c7da787e4774125b32e4fb3c244e5e7031a77cb7dd8036020"
+    },
+    {
+      "path": "web/www/grammars/markdown_inline.scm",
+      "size": 721,
+      "sha256": "9a88072f0ce54972c32fe7952ccb2d29254b6a7228bda1c7babc18df15cba797"
+    },
+    {
+      "path": "web/www/grammars/markdown_inline.wasm",
+      "size": 426117,
+      "sha256": "d47e5c43683c39b645ced8720ab90c3b3f467e715d3426b29ef3f69984d88c15"
+    },
+    {
+      "path": "web/www/grammars/moonbit.scm",
+      "size": 9068,
+      "sha256": "d2f9af6461bbc7cc8d59f7b59fdf4f98653074692976cdc5c41205bceb226f3a"
+    },
+    {
+      "path": "web/www/grammars/moonbit.wasm",
+      "size": 1147539,
+      "sha256": "5df5f5654959e7663babf00330faa0971f8e276eaf967b8a5045cb3552d8ffec"
+    },
+    {
+      "path": "web/www/grammars/python.scm",
+      "size": 1957,
+      "sha256": "a6708f209381618e2b398972c8f1ccd892f0c064eab35a2a3f911c3e22e79a7e"
+    },
+    {
+      "path": "web/www/grammars/python.wasm",
+      "size": 457883,
+      "sha256": "16108b50df4ee9a30168794252ab55e7c93bfc5765d7fa0aa3e335752c515f47"
+    },
+    {
+      "path": "web/www/grammars/ruby.scm",
+      "size": 2377,
+      "sha256": "0858de9feece6dcd3408a541f995a34918d587ac2c552096026b0e47e2b332e6"
+    },
+    {
+      "path": "web/www/grammars/ruby.wasm",
+      "size": 2106352,
+      "sha256": "09a96427d7c72f0613ed470cd9812223fc4a91d6a9c025c0235cc6bd59ff96f4"
+    },
+    {
+      "path": "web/www/grammars/rust.scm",
+      "size": 3527,
+      "sha256": "0f0343107f14a7690157f51090a979eb8f8bfe4eada7c61763ddb4c54b1311d1"
+    },
+    {
+      "path": "web/www/grammars/rust.wasm",
+      "size": 1102547,
+      "sha256": "f65f354215611fd94ad34134b3427eb3d58cbb745df7b6509ba722184db73d57"
+    },
+    {
+      "path": "web/www/grammars/toml.scm",
+      "size": 501,
+      "sha256": "2fb5c61d33a70389312254c9c392e2c5dd6313d958d6e5f8f74cadd5e0811707"
+    },
+    {
+      "path": "web/www/grammars/toml.wasm",
+      "size": 24040,
+      "sha256": "1ac6a83826c35a68857f8325e00c78f6bcbef4eb6db3931a6cf3041f76e5e09f"
+    },
+    {
+      "path": "web/www/grammars/tsx.wasm",
+      "size": 1445638,
+      "sha256": "79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8"
+    },
+    {
+      "path": "web/www/grammars/typescript.scm",
+      "size": 515,
+      "sha256": "e0c35adb819127bfd4f853fac5419e7d8ba44760246201d04a4a5ce0228a10c5"
+    },
+    {
+      "path": "web/www/grammars/typescript.wasm",
+      "size": 1413849,
+      "sha256": "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d"
+    },
+    {
+      "path": "web/www/grammars/yaml.scm",
+      "size": 962,
+      "sha256": "2fbfbbd5ca0928d0a7e09e59f8f2964b14a328a7ee0ce799270d9013dcce49a0"
+    },
+    {
+      "path": "web/www/grammars/yaml.wasm",
+      "size": 189255,
+      "sha256": "e752dc21c3591df9b45692fe417d101f45d1828c28c44d79005f4066dc7e4e91"
+    }
+  ]
+}

@@ -289,11 +289,12 @@ textarea.input { resize: vertical; }
   #editor-input.composing { max-width: calc(100vw - 16px); }
 }
 
-/* A phone keyboard leaves little vertical space. Keep search controls above
-   the status bar while retaining the file/tree and command buttons. */
+/* Keep Save and other menu commands reachable with the phone keyboard open.
+   Collapse the redundant path row and navigation instead, preserving editor
+   height and the existing 44px menu targets. Breakpoint is focus-independent
+   so pointer-down focus changes do not move controls before pointer-up. */
 @media (max-width: 599px) and (max-height: 480px) {
-  /* Focus changes on pointer-down. Do not move controls before pointer-up. */
-  #topbar .menubar, #navbar { display: none; }
+  #pathbar, #navbar { display: none; }
 }
 
 /* Landscape phones have enough horizontal room for a single header row. */
