@@ -8,7 +8,8 @@ let max_message : Int = 262_144
 struct Control {
   path : String
   mut inode : String
-  pending : Map[Int, (Int, Int)]
+  // connection, response timeout, delivery-ack timeout, window owner
+  pending : Map[Int, (Int, Int, Int, String)]
   mut next : Int
 }
 
@@ -114,10 +115,12 @@ fn Control::receive(self : Control, conn : Int, line : String) -> Unit {
   let arguments = o.get("arguments").unwrap_or(Json::object(Map([])))
   self.next += 1
   let id = self.next
+  let owner = window.owner
   let timer = set_timeout(
     () => {
-      if self.pending.get(id) is Some((c, _)) {
+      if self.pending.get(id) is Some((c, _, ack_timer, _)) {
         self.pending.remove(id)
+        clear_timeout(ack_timer)
         ignore(push_event("cancel", { "id": id }))
         reply_error(
           c, "editor did not respond; inspect its state before retrying",
@@ -126,10 +129,29 @@ fn Control::receive(self : Control, conn : Int, line : String) -> Unit {
     },
     55000,
   )
-  self.pending[id] = (conn, timer)
+  // A browser may retain a dead SSE socket after closing the page. Require the
+  // JavaScript receiver to acknowledge delivery before waiting for the full
+  // operation; a successful write to the stale transport is not liveness.
+  let ack_timer = set_timeout(
+    () => {
+      if self.pending.get(id) is Some((c, response_timer, _, expected)) {
+        self.pending.remove(id)
+        clear_timeout(response_timer)
+        if expected == window.owner {
+          detach_window(expected)
+        }
+        reply_error(
+          c, "Readit is not open in a browser; open the URL printed by the server",
+        )
+      }
+    },
+    2000,
+  )
+  self.pending[id] = (conn, timer, ack_timer, owner)
   if !push_event("control", { "id": id, "method": op, "arguments": arguments }) {
     self.pending.remove(id)
     clear_timeout(timer)
+    clear_timeout(ack_timer)
     reply_error(
       conn, "Readit is not open in a browser; open the URL printed by the server",
     )
@@ -137,11 +159,23 @@ fn Control::receive(self : Control, conn : Int, line : String) -> Unit {
 }
 
 ///|
+/// The browser received the event. This is separate from the eventual answer:
+/// some operations legitimately take longer than the stale-transport check.
+fn Control::ack(self : Control, id : Int, owner : String) -> Unit {
+  guard self.pending.get(id) is Some((_, _, timer, expected)) &&
+    owner == expected && owner == window.owner else { return }
+  clear_timeout(timer)
+}
+
+///|
 /// The window's answer to a request.
 fn Control::answer(self : Control, id : Int, response : Json) -> Unit {
-  guard self.pending.get(id) is Some((conn, timer)) else { return }
+  guard self.pending.get(id) is Some((conn, timer, ack_timer, _)) else {
+    return
+  }
   self.pending.remove(id)
   clear_timeout(timer)
+  clear_timeout(ack_timer)
   if socket_alive(conn) {
     socket_reply(conn, response.stringify())
   }

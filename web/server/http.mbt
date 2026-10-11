@@ -152,6 +152,24 @@ fn Server::handle(
     attach_window(id, owner)
     return
   }
+  if path == "/api/control-ack" {
+    if op != "POST" || header(headers, "x-readit-token") != self.token {
+      respond_json(id, 403, { "error": "invalid token" })
+      return
+    }
+    let args = @json.parse(body) catch { _ => Json::object(Map([])) }
+    match (field(args, "window"), field(args, "id"), self.control) {
+      (Some(String(owner)), Some(Number(call_id, ..)), Some(control)) =>
+        if valid_window_id(owner) {
+          control.ack(call_id.to_int(), owner)
+          respond_json(id, 200, { "ok": true })
+        } else {
+          respond_json(id, 400, { "error": "invalid acknowledgement" })
+        }
+      _ => respond_json(id, 400, { "error": "invalid acknowledgement" })
+    }
+    return
+  }
   if path == "/api/detach" {
     let args = @json.parse(body) catch { _ => Json::object(Map([])) }
     if op != "POST" || field(args, "token") != Some(Json::string(self.token)) {

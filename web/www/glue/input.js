@@ -204,7 +204,18 @@ export function connectEvents() {
   window.addEventListener('pagehide', detach, { once: true });
   window.addEventListener('unload', detach, { once: true });
   source.onopen = () => send('stream', { state: 'open' });
-  source.addEventListener('control', (e) => send('control', JSON.parse(e.data)));
+  source.addEventListener('control', (e) => {
+    const call = JSON.parse(e.data);
+    // A successful server write does not prove that a retained Windows SSE
+    // socket still has a page behind it. Acknowledge receipt before the wasm
+    // operation, whose eventual response may legitimately take longer.
+    void fetch('/api/control-ack', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-readit-token': token },
+      body: JSON.stringify({ id: call.id, window: windowId }),
+    }).catch(() => {});
+    send('control', call);
+  });
   source.addEventListener('superseded', () => { send('stream', { state: 'superseded' }); source.close(); });
   source.onerror = () => send('stream', { state: 'error' });
 }
