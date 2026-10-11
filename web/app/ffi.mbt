@@ -46,6 +46,10 @@ fn js_rect(id : String) -> String = "dom" "rect"
 fn js_range_rect(view : String, line : Int, start : Int, end : Int) -> String = "dom" "range_rect"
 
 ///|
+/// Visible rendered row bounds (0-based) as "first,last", or "" when none are visible.
+fn js_visible_rows(view : String) -> String = "dom" "visible_rows"
+
+///|
 /// Right edge of the rendered code on lines [first, last] (0-based) of a view.
 fn js_rows_right(view : String, first : Int, last : Int) -> Double = "dom" "rows_right"
 

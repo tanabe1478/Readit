@@ -28,20 +28,17 @@ fn viewport_lines() -> (Int, Int)? {
   if reader.compare || reader.overview_visible {
     return None
   }
-  let top = js_scroll_top("editor-scroll")
-  let height = js_client_height("editor-scroll")
-  if height <= 0.0 {
+  // Wrapped/virtualized rows have variable heights. Use rendered geometry,
+  // shared with guide anchoring, rather than dividing scroll pixels by line height.
+  let parts = js_visible_rows("editor").split(",").map(p => p.to_owned()).collect()
+  guard parts is [a, b] else { return None }
+  guard @core.parse_natural(a) is Some(first) &&
+    @core.parse_natural(b) is Some(last) else {
     return None
   }
-  let lh = line_height()
-  let first = (top / lh)
-    .floor()
-    .to_int()
-    .clamp(min=0, max=(e.line_count() - 1).max(0))
-  let last = ((top + height) / lh)
-    .ceil()
-    .to_int()
-    .clamp(min=first, max=(e.line_count() - 1).max(0))
+  if first > last || last >= e.line_count() {
+    return None
+  }
   Some((first + 1, last + 1))
 }
 
@@ -114,6 +111,7 @@ fn control_state() -> Json {
           "id": g.id,
           "title": g.title,
           "kind": g.kind,
+          "code_view": g.code_view,
           "question_open": g.question_open,
           "question": opt_string(g.question),
           "pending_question": opt_int(g.pending_question),

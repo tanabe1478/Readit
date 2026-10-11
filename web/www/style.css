@@ -204,6 +204,9 @@ textarea.input { resize: vertical; }
 .pointer .btn { align-self: flex-start; }
 .link-underline { position: fixed; z-index: 19; border-bottom: 1px solid #66b5ff; cursor: pointer; }
 .guide { position: fixed; z-index: 25; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.5); overflow-y: auto; }
+/* The switch stays reachable even at the end of a long explanation. */
+.guide-controls { position: sticky; top: -12px; z-index: 1; margin: -12px -12px 0; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+#guide-return { position: fixed; z-index: 25; right: 12px; bottom: 36px; max-width: calc(100vw - 24px); min-height: 44px; background: var(--panel); border-color: var(--accent); box-shadow: 0 4px 16px #0008; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #guide-main, #guide-after { display: flex; flex-direction: column; gap: 8px; }
 #guide-form:empty { display: none; }
 .guide-handle { cursor: move; flex-shrink: 0; user-select: none; }
@@ -283,6 +286,7 @@ textarea.input { resize: vertical; }
   .chapter-head { flex-wrap: wrap; }
   #guide { left: 8px !important; right: 8px; top: auto !important; bottom: 36px; width: auto !important; max-height: 50dvh; }
   .guide-handle { cursor: default; }
+  #guide-return { right: 8px; max-width: calc(100vw - 16px); }
   .guide-body, .guide-answer, .guide-prompt { overflow-wrap: anywhere; }
   .pointer { left: 8px !important; right: 8px; width: auto !important; max-height: 50dvh; overflow-y: auto; }
   .pointer .row-buttons { flex-wrap: wrap; }

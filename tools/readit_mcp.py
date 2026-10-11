@@ -34,12 +34,6 @@ def integer(description, maximum=None, minimum=1):
     return value
 
 
-WORKSPACE = string("Exact workspace path returned by readit_state. Prevents controlling a different project.")
-PATH = string("Workspace-relative file path, absolute open-file path, or definition path returned by readit_symbol.")
-LINE = integer("One-based line number.")
-COLUMN = integer("One-based UTF-16 column (not byte offset).")
-
-
 def tool(name, description, properties, required=(), changes_view=False, idempotent=True):
     return {
         "name": name, "description": description,
@@ -49,94 +43,12 @@ def tool(name, description, properties, required=(), changes_view=False, idempot
     }
 
 
-KINDS = ["explanation", "hypothesis", "prediction", "verification"]
-
-STEP = {"type": "object", "properties": {
-    "id": string("Unique step id."), "title": string("Step heading."),
-    "body": string("Complete explanation, max 2000 characters."), "path": PATH,
-    "line": LINE, "column": COLUMN, "expected_text": string("Exact current source to highlight."),
-    "kind": {"type": "string", "enum": KINDS, "description":
-             "Optional, default explanation. hypothesis: a claim the reader checks in later code. "
-             "prediction: the reader records what they expect before reading on; requires prompt. "
-             "verification: shows the reader's earlier prediction next to this code; requires verifies."},
-    "prompt": string("prediction only: the question the reader answers, max 2000 characters."),
-    "verifies": string("verification only: id of an earlier prediction step in the same tour.")},
-    "required": ["id", "title", "body", "path", "line", "column", "expected_text"], "additionalProperties": False}
-STEPS = {"type": "array", "items": STEP, "maxItems": 32}
-
-EVIDENCE = {"type": "object", "properties": {
-    "label": string("What this code shows, max 100 characters."),
-    "path": string("Workspace-relative file path."), "line": LINE, "column": COLUMN,
-    "expected_text": string("Exact current source, max 16000 characters. Rejects stale code.")},
-    "required": ["label", "path", "line", "column", "expected_text"], "additionalProperties": False}
-
-CLAIM = {"type": "object", "properties": {
-    "id": string("Claim id, unique within the overview."),
-    "statement": string("The claim, max 1000 characters. Plain text."),
-    "confidence": {"type": "string", "enum": ["source_confirmed", "inferred"], "description":
-                   "source_confirmed only when the evidence text itself shows the claim. "
-                   "Design intent, runtime behavior and conclusions drawn from several places are inferred."},
-    "evidence": {"type": "array", "items": EVIDENCE, "minItems": 1, "maxItems": 8}},
-    "required": ["id", "statement", "confidence", "evidence"], "additionalProperties": False}
-
-READER_CONTEXT = {"type": "object", "properties": {
-    "known": {"type": "array", "items": string("A concept the explanation assumes, max 200 characters."), "maxItems": 16},
-    "focus": {"type": "array", "items": string("A concept this tour concentrates on, max 200 characters."), "maxItems": 8}},
-    "required": [], "additionalProperties": False}
-
-OVERVIEW = {"type": "object", "properties": {
-    "title": string("Overview title, max 100 characters."),
-    "summary": string("Purpose and scope, max 2000 characters. Plain text."),
-    "relationships": string("Roles, boundaries, and main flow, max 4000 characters. Plain text with newlines."),
-    "reader_context": {**READER_CONTEXT, "description":
-                       "Optional. What the explanation assumes the reader knows, and what they want to focus on. Only include what the conversation makes clear. Not stored."},
-    "claims": {"type": "array", "items": CLAIM, "maxItems": 8, "description":
-               "Optional key claims, each backed by source evidence the reader can open."},
-    "chapters": {"type": "array", "minItems": 1, "maxItems": 16, "items": {
-        "type": "object", "properties": {
-            "title": string("Chapter title, max 100 characters."),
-            "summary": string("What the reader will learn, max 1000 characters."),
-            "start_step": string("Existing step id. Chapters must start at the first step and proceed in step order.")},
-        "required": ["title", "summary", "start_step"], "additionalProperties": False}}},
-    "required": ["title", "summary", "relationships", "chapters"], "additionalProperties": False}
-
-TOOLS = [
-    tool("readit_guide_load", "Load an entire prepared tour atomically. Next/back run locally without AI. Provide overview to open a native overview tab before code. Read all source first. Step events are informational, not requests to generate another explanation. A prediction step keeps Next disabled until the reader records a prediction or chooses unknown; that happens locally and emits a prediction event, not a request for an answer.",
-         {"workspace": WORKSPACE, "id": string("Tour id."), "event_sequence": integer("Latest guide event sequence.", minimum=0), "steps": {**STEPS, "minItems": 1}, "overview": OVERVIEW},
-         ("workspace", "id", "event_sequence", "steps"), True),
-    tool("readit_guide_revise", "Answer a pending tour question and atomically replace all unread steps after visited_through, when the question changes what the rest of the route should cover. When the prepared steps still fit, answer with readit_guide_answer instead and keep them. Preserve visited history and current position. Read state/events first; reject stale navigation or ended tours. Existing steps remain usable while generating. An empty steps array ends the route after visited history.",
-         {"workspace": WORKSPACE, "id": string("Current tour id."), "event_sequence": integer("Latest guide event sequence.", minimum=0), "question_sequence": integer("Pending question event sequence."), "answer": string("Answer to actual question, max 4000 characters."), "steps": STEPS, "overview": OVERVIEW},
-         ("workspace", "id", "event_sequence", "question_sequence", "answer", "steps"), True),
-    tool("readit_pin", "Keep a read-only snapshot of related code beside the main editor without changing its active file or cursor. Includes unsaved text. One pinned file at a time; another pin replaces it. Re-pin to refresh after edits.", {"workspace": WORKSPACE, "path": PATH, "line": LINE}, ("workspace", "path"), True),
-    tool("readit_unpin", "Close the pinned code view, preserving the main editor.", {"workspace": WORKSPACE}, ("workspace",), True),
-    tool("readit_guide_show", "Show a short explanation anchored to exact source text and select it. User buttons produce events. Read events before continuing; end/interrupted means stop unless user asks to resume.",
-         {"workspace": WORKSPACE, "id": string("Unique step identifier."), "title": string("Short heading, at most 100 characters."), "body": string("Plain-text explanation, at most 2000 characters."), "path": PATH, "line": LINE, "column": COLUMN, "expected_text": string("Exact nonempty source text to highlight, at most 16000 characters. Rejects stale code."), "event_sequence": integer("Latest guide_event_sequence from state or latest_sequence from events.", minimum=0)},
-         ("workspace", "id", "title", "body", "path", "line", "column", "expected_text", "event_sequence"), True),
-    tool("readit_guide_events", "Read user responses after a sequence number. Actions: next, question, end, interrupted, cleared. Question events include user text, source range, exact code, current explanation and previous Q&A. Answer using readit_guide_answer without advancing the guide. Non-consuming; store latest_sequence. If truncated, stop and inspect state. Poll while actively guiding, not indefinitely after end.",
-         {"workspace": WORKSPACE, "after": integer("Last received sequence, initially zero.", minimum=0)}, ("workspace", "after")),
-    tool("readit_guide_answer", "Answer a pending user question in the existing bubble, in a prepared tour or a single explanation. Preserves the question, source location, guide step and the remaining tour steps. Rejects responses after end, source changes or a different question. Do not substitute a canned explanation for the user question.",
-         {"workspace": WORKSPACE, "id": string("Step id from the question event."), "question_sequence": integer("Sequence of the question event."), "body": string("Answer to the actual question, plain text, at most 4000 characters.")}, ("workspace", "id", "question_sequence", "body"), True),
-    tool("readit_guide_clear", "Remove the current explanation bubble.", {"workspace": WORKSPACE}, ("workspace",), True),
-    tool("readit_state", "Inspect the visible Readit window, cursor, selection, tabs, unsaved flags and viewport. Start here.", {}),
-    tool("readit_open_folder", "Open a folder as the Readit workspace in the current window, like an IDE's open folder. Use it when the code to read is outside the opened folder. Replaces the project, tabs and any tour; unsaved edits make Readit ask the user to save or discard first. Starts Readit on this folder if it is not running yet. Returns the new state; pass its workspace to later tools.",
-         {"path": string("Folder to open: absolute, or relative to this MCP server's working directory.")}, ("path",), True),
-    tool("readit_files", "List the editor's workspace text files; paginate with next_offset. Does not navigate the UI.",
-         {"workspace": WORKSPACE, "filter": string("Case-insensitive path substring."), "offset": integer("Pagination offset.", minimum=0), "limit": integer("Page size.", 500)}, ("workspace",)),
-    tool("readit_read", "Read current text, including unsaved edits. Use small ranges; does not change the visible file.",
-         {"workspace": WORKSPACE, "path": PATH, "start_line": LINE, "line_count": integer("Number of lines to read.", 400),
-          "numbered": {"type": "boolean", "description": "Prefix each line with its one-based number, as 'NNN| text', to anchor steps without counting."}}, ("workspace", "path")),
-    tool("readit_search", "Find literal occurrences in current workspace text, including unsaved edits. Use readit_symbol for semantic references.",
-         {"workspace": WORKSPACE, "query": string("Nonempty, case-sensitive literal query."), "limit": integer("Maximum matches.", 300),
-          "prefix": string("Optional workspace-relative path prefix, such as web/app/ or tools/, to search only that part of the project.")}, ("workspace", "query")),
-    tool("readit_open", "Show a file at a line and select an optional [start,end) range so the user can follow. Preserves unsaved buffers and records navigation history.",
-         {"workspace": WORKSPACE, "path": PATH, "line": LINE, "column": COLUMN, "end_line": LINE, "end_column": COLUMN}, ("workspace", "path"), True),
-    tool("readit_symbol", "Resolve the symbol at the visible editor cursor via its language server. Returns real definition/reference locations. By default displays results in the editor; then use readit_open to show a chosen target.",
-         {"workspace": WORKSPACE, "kind": {"type": "string", "enum": ["definition", "references", "type_definition", "implementation", "symbols", "hover"]}, "show": {"type": "boolean", "description": "Show results in the existing results panel; defaults true."}}, ("workspace", "kind"), True),
-    tool("readit_history", "Move backward or forward in the user's navigation history.",
-         {"workspace": WORKSPACE, "direction": {"type": "string", "enum": ["back", "forward"]}}, ("workspace", "direction"), True, False),
-    tool("readit_view", "Change existing file-tree, diff or line-wrap views. Does not edit or save source files.",
-         {"workspace": WORKSPACE, "diff": {"type": "boolean"}, "file_tree": {"type": "boolean"}, "wrap": {"type": "boolean"}, "overview": {"type": "boolean", "description": "Show or hide the loaded overview tab."}}, ("workspace",), True),
-]
+# Shared with the attach-only Node entry point. Keep schemas canonical here.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "readit_mcp_schema.json"), encoding="utf-8") as schema_file:
+    _schema = json.load(schema_file)
+TOOLS = _schema["tools"]
+# Preserve the existing declarative constants for importers.
+globals().update(_schema["definitions"])
 
 
 class RpcError(Exception):

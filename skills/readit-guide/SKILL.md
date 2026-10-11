@@ -5,7 +5,7 @@ description: Guide a user through source code in the shared Readit editor using 
 
 # Guide code reading in Readit
 
-Readit is the user's shared view of the source. Use short, source-anchored bubbles during an interactive walkthrough, and the existing conversation for broader discussion. Do not create an explanation sidebar or notes in the repository unless the user asks for them.
+Readit is the user's shared view of the source. Use focused, source-anchored explanations during an interactive walkthrough, and the existing conversation for broader discussion. Keep the explanation detailed enough to understand the code, rather than assuming a small-screen reader only wants a summary. Do not create an explanation sidebar or notes in the repository unless the user asks for them.
 
 ## Connect to the current context
 
@@ -18,7 +18,7 @@ When the code to read is outside the opened folder, such as a sibling repository
 ## Walk through the source
 
 - Inspect current text with `readit_read`; it includes unsaved edits. Pass `numbered: true` when you will anchor steps or evidence to what you read, so line numbers come from the tool instead of counting. Find candidate files with `readit_files` and literal matches with `readit_search`; its `prefix` (for example `web/app/`) keeps old or unrelated trees out of the results.
-- Use `readit_open` to show a useful, small range before explaining it. Coordinates are one-based UTF-16. `end_line` and `end_column` describe an exclusive endpoint. Selection leaves the caret at the start, which is also the position used by symbol queries.
+- After preparation is complete, use `readit_open` to show a useful, small range when a separate navigation step is needed. Prefer an atomic prepared tour for a multi-step explanation. Coordinates are one-based UTF-16. `end_line` and `end_column` describe an exclusive endpoint. Selection leaves the caret at the start, which is also the position used by symbol queries.
 - Resolve definitions, references, types, implementations or document symbols with `readit_symbol`. Use returned paths and positions instead of guessing. Literal search matches are not semantic references. Language-server information is not an AI explanation.
 - `readit_symbol` shows results in the normal results panel by default. Use `show: false` for background inspection. Open a returned target with `readit_open`; external definition files are read-only.
 - Use `readit_history` to return from a detour and `readit_view` for ordinary diff, wrap and file-tree controls.
@@ -31,7 +31,11 @@ Use source and test evidence to distinguish what is verified from what is inferr
 
 ## Prepared reading tours
 
-For a walkthrough, read the relevant sources and prepare the complete route before showing the first step. Send `readit_guide_load(workspace, id, event_sequence, steps)` with 1–32 steps. Each step has a unique `id`, `title`, `body` (max 2,000 characters), `path`, one-based UTF-16 `line`/`column`, and exact `expected_text` from `readit_read`. All steps are validated before anything is replaced. Keep each selected range focused so code and explanation fit together. Use `readit_pin` for related code when helpful.
+For a walkthrough, finish the investigation and prepare the complete explanations, source anchors and overview before changing the reader's screen. Do not open Preview, navigate to a placeholder, show an unfinished first bubble, or move through source files while leaving the reader waiting for the rest. During preparation prefer `readit_state`, `readit_files`, `readit_search`, `readit_read` and `readit_symbol(show: false)`; these do not change the visible file. Defer `readit_open`, `readit_pin`, view changes and guide display until the explanation is ready. A required workspace change still follows the open-folder rule above, not reading outside the current workspace.
+
+If an authorized connection recovery requires opening the browser, do the available investigation and drafting first, open it only when ready to validate and present the complete guide, then check the current workspace, unsaved text, pending questions and dialogs. Do not replace a competing guide or input, replay old events, or treat draft explanations or an unverified UI build as complete. A blocked connection is not permission to start, restart or reload a server.
+
+Once ready, re-read the current state/event sequence and send `readit_guide_load(workspace, id, event_sequence, steps)` once, with the whole 1–32-step route and overview when appropriate. This atomic presentation, rather than incremental AI-driven screen transitions, is the default. Each step has a unique `id`, `title`, `body` (max 2,000 characters), `path`, one-based UTF-16 `line`/`column`, and exact `expected_text` from `readit_read`. All steps are validated before anything is replaced. Keep each selected range focused so code and explanation fit together. Use `readit_pin` for related code when helpful.
 
 Readit owns Next/Back and completes the last step locally. Its `step` events are informational: do not generate or push another step in response. The loaded route works even after the AI stops running. `readit_state.guide_tour` provides its id, current index, total steps, visited_through, and step ids/titles; indexes are zero-based.
 
@@ -46,6 +50,7 @@ The user should not have to announce in the chat that they sent a question. Whil
   - `next`: continue a single-bubble walkthrough, then restart it the same way.
   - `timeout`: restart it with the same `--after`.
   - `ended` or `truncated`: stop waiting. After `truncated`, read `readit_state` before acting.
+- Clients with automatic question delivery, including Android Pi's durable Readit adapter: rely on the existing delivery after `readit_guide_load`/`show`. Do not start another waiter or Pi/model session, even if state contains a legacy Python `wait_command`.
 - pi with the Readit package (`integrations/pi`): the package already waits for the whole session and sends each question to you as a user message. Do not start another waiter. `/readit-watch off` stops it.
 
 Tell the user once that questions arrive automatically while this session is open. In a one-shot run that ends after this response (for example `claude -p`), there is nobody to wake: skip the waiter and tell the user to ask in a new run when they have sent a question.
@@ -73,6 +78,10 @@ Hypotheses. When it is worth having the reader look before you conclude, use a s
 Predictions. A step with `kind: "prediction"` and a `prompt` (2000) asks the reader to commit to an expectation before reading on; Next stays disabled until they record one or choose "unknown". Use them sparingly, at ownership, lifetime, state transitions, error propagation, boundary conditions, caller/callee responsibility, fallbacks, concurrency, data flow, dependency direction or API contracts, e.g. "If this returns Err, who recovers?". Never for plain syntax. Follow with `kind: "verification"` and `verifies: <earlier prediction id>`; Readit shows the reader's prediction above your body, so write the body as what the code actually does and where to see it. Do not grade predictions or call them right or wrong, in the bubble or in chat.
 
 Predictions are local: recording one emits a `prediction` event and fills `readit_state.guide_tour.predictions`, but it is not a request to you, and the waiter does not wake for it. Read them later only when useful, for example to address a misunderstanding the reader asks about. Questions remain the reader-to-AI channel. When revising, recorded predictions in the visited prefix are kept, and new verification steps may verify them.
+
+## Full explanations on small screens
+
+Do not assume a phone reader only wants a short summary. Keep enough detail to understand the code; split at meaningful source boundaries, not merely to hide an oversized bubble. When supported by the UI, let the reader switch between the full explanation and unobscured code, and return to the same explanation at its reading position. Hiding the explanation is presentation only: it must not end/advance the guide, resend a question, discard Q&A or drafts, or reload the page. The reader controls these switches and local Next/Back; do not force them back to an explanation after they choose to inspect code. Do not promise a new presentation control before its build and runtime behavior are verified.
 
 ## Single explanations
 

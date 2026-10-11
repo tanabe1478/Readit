@@ -45,11 +45,15 @@
   <footer id="status"></footer>
   <div id="pointer-layer"></div>
   <div id="guide" class="guide" style="display:none">
+    <div id="guide-controls" class="guide-controls" style="display:none">
+      <button class="btn" data-act="guide-code" aria-controls="guide" aria-expanded="true">コードを見る</button>
+    </div>
     <div id="guide-main"></div>
     <div id="guide-predict"></div>
     <div id="guide-form"></div>
     <div id="guide-after"></div>
   </div>
+  <button id="guide-return" class="btn" data-act="guide-resume" aria-controls="guide" aria-expanded="false" style="display:none"></button>
   <div id="overlay" style="display:none">
     <div id="dialog" tabindex="-1">
       <div id="dialog-shell"></div>

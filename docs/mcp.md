@@ -30,6 +30,8 @@ MCPクライアントのstdio設定例（絶対パスは環境に合わせて変
 
 MCPクライアントごとの設定形式に合わせてこのcommandとargsを登録します。ReaditはAIプロバイダーに依存しません。Python 3.10以上の標準ライブラリだけで動作します。
 
+Pythonを使わず既存の制御socketへ接続する場合は、Node.js 24以降の標準ライブラリのみで動く `node tools/readit_mcp.mjs --socket <既存socket>` も利用できます。attach専用で、`--launch` やブラウザの自動起動は行いません。ツール定義はPython入口と共有です。[Node入口・Android Pi連携の境界と検証](readit-node-mcp.md)を参照してください。
+
 `--control-socket`を指定しない起動では、外部操作の待受を作りません。指定時は同じユーザーがアクセスできるプライベートなUnix socketを作ります。
 Web版の画面用のHTTPは `127.0.0.1` だけで待ち受け、起動ごとのトークンとHostヘッダーの確認で、他のサイトのページからの操作を拒否します。要求はブラウザで開いている画面が処理し、画面を開いていない間は「Readit is not open in a browser」を返します。
 旧版（ネイティブ版）は `./artifacts/Readit.app/Contents/MacOS/Readit --control-socket ...` で同じように接続できます。

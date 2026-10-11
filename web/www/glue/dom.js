@@ -1,6 +1,7 @@
 // DOM operations imported by the wasm app ("dom" namespace).
 import { $ } from './bridge.js';
 import { rangeRect } from './hit.js';
+import { visibleRows } from './viewport.js';
 
 const html = new Map();
 function setHtml(id, value) {
@@ -88,6 +89,11 @@ export const dom = {
     return [r.left, r.top, r.width, r.height].map((v) => v.toFixed(1)).join(',');
   },
   range_rect: rangeRect,
+  // Actual visible logical rows, not scroll pixels divided by a fixed line height.
+  visible_rows: (view) => {
+    const viewport = window.visualViewport ?? { offsetTop: 0, height: window.innerHeight };
+    return visibleRows(scrollContainer(view), view, viewport);
+  },
   // Right edge of the rendered code on lines [first, last] of a view.
   rows_right: (view, first, last) => {
     let right = 0;

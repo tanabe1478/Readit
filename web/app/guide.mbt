@@ -185,6 +185,10 @@ fn prepare_guide(args : Json, in_tour? : Bool = true) -> Guide raise Failure {
     answer: None,
     question_error: None,
     pending_next: None,
+    code_view: false,
+    explicit_open: false,
+    scroll_top: 0.0,
+    restore_scroll: true,
     position: None,
     drag: None,
   }
@@ -486,7 +490,9 @@ fn open_range(
       // The cursor sits at the start, like the native select_to(start).
       e.select(end, start)
       request_reveal(line, if top { 1 } else { 2 })
-      focus_editor()
+      // Source navigation is reading, not an invitation to open a phone IME.
+      // Desktop still focuses the editor through focus_document().
+      focus_document()
     }
     then()
   })
@@ -590,6 +596,10 @@ fn activate_guide(guide : Guide, then : (Result[Unit, String]) -> Unit) -> Unit 
     reader.overview_visible = false
     reader.compare = false
     clear_pointer()
+    // Step/chapter navigation opens the explanation, at its saved reading point.
+    guide.code_view = false
+    guide.explicit_open = false
+    guide.restore_scroll = true
     reader.guide = Some(guide)
     js_set_value("guide-question", "")
     then(Ok(()))
@@ -625,7 +635,11 @@ fn guide_step(direction : Int, gate? : Bool = true) -> Unit {
     show_overview()
     return
   }
-  let target = tour.steps[next].copy()
+  remember_guide_scroll()
+  let target = match reader.guide {
+    Some(g) if next == tour.index => g.copy()
+    _ => tour.steps[next].copy()
+  }
   let previous = reader.guide
   load_texts([target.path], () => {
     activate_guide(target, result => {
@@ -661,6 +675,7 @@ fn guide_step(direction : Int, gate? : Bool = true) -> Unit {
 
 ///|
 fn guide_response(action : String) -> Unit {
+  remember_guide_scroll()
   if action == "next" &&
     (match reader.guide {
       Some(g) =>
@@ -699,6 +714,35 @@ fn guide_response(action : String) -> Unit {
     reader.guide = Some(guide)
     after(10000, () => ()) |> ignore
   }
+}
+
+///|
+fn remember_guide_scroll() -> Unit {
+  if guide_visible.val && reader.guide is Some(g) && !g.code_view {
+    g.scroll_top = js_scroll_top("guide")
+  }
+}
+
+///|
+/// Switch views without changing the editor, tour, Q&A, or event sequence.
+fn guide_code_view(code : Bool) -> Unit {
+  validate_guide()
+  guard reader.guide is Some(g) else { return }
+  if dialog_open() || reader.overview_visible || reader.compare ||
+    g.code_view == code {
+    return
+  }
+  if code {
+    remember_guide_scroll()
+    g.code_view = true
+    g.drag = None
+  } else {
+    g.code_view = false
+    g.explicit_open = true
+    g.restore_scroll = true
+  }
+  // Returning to either reading view must not reopen the phone IME.
+  reader.focus = "body"
 }
 
 ///|
@@ -795,6 +839,7 @@ fn show_overview() -> Unit {
     return
   }
   if reader.tour is Some(t) && t.overview is Some(_) {
+    remember_guide_scroll()
     reader.overview_visible = true
     reader.overview_tab = true
     clear_pointer()

@@ -94,6 +94,8 @@ fn guide_anchor(guide : Guide) -> Rect? {
 
 ///|
 priv struct GuideView {
+  code_view : Bool
+  return_label : String
   style : String
   main : String
   /// The prediction input; kept apart so redraws keep what the reader typed.
@@ -112,9 +114,11 @@ fn render_guide() -> GuideView? {
   let anchor = guide_anchor(guide)
   // A manually placed bubble belongs to the viewport, including while its code
   // is offscreen. Automatic bubbles only follow visible source.
-  if anchor is None && guide.position is None {
+  if anchor is None && guide.position is None &&
+    !guide.code_view && !guide.explicit_open {
     return None
   }
+  let anchored = anchor is Some(_)
   let anchor = anchor.unwrap_or({
     left: 12.0,
     top: 12.0,
@@ -152,9 +156,13 @@ fn render_guide() -> GuideView? {
     vh,
     preferred,
     guide.position,
-    beside=guide_block_right(guide),
+    beside=if anchored { guide_block_right(guide) } else { 0.0 },
   )
-  let max_height = if guide.position is Some(_) {
+  // Mobile CSS docks the bubble above the footer. Leave both the footer and
+  // the top edge free, including an explicitly reopened offscreen explanation.
+  let max_height = if narrow_layout() {
+    (vh - 48.0).max(1.0)
+  } else if guide.position is Some(_) || !anchored {
     (vh - 24.0).max(1.0)
   } else if left >= anchor.right() {
     (vh - top - 20.0).max(1.0)
@@ -300,6 +308,8 @@ fn render_guide() -> GuideView? {
   row.write_string(button("guide-end", "終了"))
   row.write_string("</div>")
   Some({
+    code_view: guide.code_view,
+    return_label: "解説に戻る · \{progress}\{guide.title}",
     style: "left:\{px(left)};top:\{px(top)};width:\{px(width)};max-height:\{px(max_height)}",
     main: out.to_string(),
     predict,

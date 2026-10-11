@@ -211,6 +211,13 @@ priv struct Guide {
   mut answer : String?
   mut question_error : String?
   mut pending_next : Double?
+  /// Presentation only: hiding an explanation never ends or advances its guide.
+  mut code_view : Bool
+  /// An explicitly reopened explanation stays reachable even off its source.
+  mut explicit_open : Bool
+  /// Reading position in the full explanation, retained independently of code.
+  mut scroll_top : Double
+  mut restore_scroll : Bool
   /// Manual position after dragging, in viewport pixels.
   mut position : (Double, Double)?
   mut drag : (Double, Double, Double, Double)?

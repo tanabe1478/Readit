@@ -5,6 +5,7 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "build": "node scripts/build.mjs",
+    "build:js": "node scripts/moonc-build.mjs",
     "start": "node scripts/start.mjs",
     "test:e2e": "playwright test"
   },

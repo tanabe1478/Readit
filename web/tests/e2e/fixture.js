@@ -7,8 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-export const repo = path.dirname(web);
+const sourceWeb = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+// Exercise an isolated candidate bundle without replacing the user's live assets.
+const web = process.env.READIT_TEST_WEB_ROOT
+  ? fs.realpathSync(process.env.READIT_TEST_WEB_ROOT)
+  : sourceWeb;
+export const repo = path.dirname(sourceWeb);
 
 export function makeProject(files, { git = false } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'readit-e2e-')));

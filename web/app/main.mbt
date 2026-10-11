@@ -222,6 +222,9 @@ fn handle_event(kind : String, args : Json) -> Bool {
       if event_text(args, "id") == "pinned-scroll" && reader.pinned is Some(p) {
         p.scroll_top = js_scroll_top("pinned-scroll")
       }
+      if event_text(args, "id") == "guide" {
+        remember_guide_scroll()
+      }
       false
     }
     "input" => {
@@ -413,6 +416,8 @@ fn on_action(act : String, arg : String) -> Unit {
         load_texts([path], () => if pin_code(path, line) is Err(e) { say(e) })
       }
     "chapter" => if @core.parse_natural(arg) is Some(i) { open_chapter(i) }
+    "guide-code" => guide_code_view(true)
+    "guide-resume" => guide_code_view(false)
     "guide-back" => guide_step(-1)
     "guide-next" => guide_step(1)
     "guide-ask" => open_guide_question()
@@ -738,14 +743,23 @@ fn render() -> Unit {
   js_set_html("pointer-layer", pointer)
   match render_guide() {
     Some(view) => {
-      show_region("guide", true)
+      // Keep the full explanation and input nodes while reading code; hiding
+      // them is not cancellation and must not erase a question/prediction draft.
       js_set_html("guide-main", view.main)
       js_set_html("guide-predict", view.predict)
       js_set_html("guide-form", view.form)
       js_set_html("guide-after", view.after)
       js_set_style("guide", "cssText", view.style)
-      guide_visible.val = true
-      let height = js_natural_height("guide")
+      show_region("guide", !view.code_view)
+      show_region("guide-controls", !view.code_view)
+      js_set_html("guide-return", e(view.return_label))
+      show_region("guide-return", view.code_view)
+      guide_visible.val = !view.code_view
+      if !view.code_view && reader.guide is Some(g) && g.restore_scroll {
+        js_set_scroll_top("guide", g.scroll_top)
+        g.restore_scroll = false
+      }
+      let height = if view.code_view { 0.0 } else { js_natural_height("guide") }
       if height > 0.0 &&
         (
           reader.guide_height_key != view.key ||
@@ -761,11 +775,12 @@ fn render() -> Unit {
     }
     None => {
       show_region("guide", false)
-      if guide_visible.val {
-        js_set_html("guide-form", "")
-      }
-      // A hidden bubble keeps the prediction being typed; an ended one does not.
+      show_region("guide-controls", false)
+      show_region("guide-return", false)
+      // Offscreen/overview/dialog visibility changes are not cancellation.
+      // Only an ended guide discards the input nodes and their drafts.
       if reader.guide is None {
+        js_set_html("guide-form", "")
         js_set_html("guide-predict", "")
       }
       guide_visible.val = false
