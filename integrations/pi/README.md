@@ -14,7 +14,7 @@ pi install /absolute/path/to/Readit/integrations/pi
 
 pi のセッションごとに専用の Readit を使います。最初に Readit のツールを使ったときに、pi を起動したフォルダを開いた画面がブラウザに開き、セッションの終了とともに止まります（`readit_mcp.py --launch`）。画面のヘッダーには `pi` と出ます。Claude Code など他のセッションの画面やツアーとは混ざりません。
 
-手で起動した Readit を使いたい場合は、その socket を `READIT_SOCKET` に設定します（例: `READIT_SOCKET=~/.readit/control.sock`）。この場合は起動せず、その画面につなぎます。Python は `READIT_PYTHON`（既定は `python3`）で変えられます。
+手で起動した Readit を使いたい場合は、その socket を `READIT_SOCKET` に設定します（例: `READIT_SOCKET=~/.readit/control.sock`）。この場合は起動せず、その画面につなぎます。Python は `READIT_PYTHON`（既定はWindowsで`python`、それ以外で`python3`）で変えられます。
 
 ## 使い方
 

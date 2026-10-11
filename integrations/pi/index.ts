@@ -8,7 +8,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { ReaditWatcher } from "./watcher.ts";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const python = process.env.READIT_PYTHON || "python3";
+const python =
+  process.env.READIT_PYTHON || (process.platform === "win32" ? "python" : "python3");
 // By default this session launches a Readit of its own, so other sessions keep
 // their own windows and tours. READIT_SOCKET instead joins an existing Readit.
 const shared = process.env.READIT_SOCKET;
