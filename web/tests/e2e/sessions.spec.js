@@ -17,8 +17,12 @@ function session(name, project, dir, { cwd } = {}) {
   const urlFile = path.join(dir, `${name}.url`);
   let opener = `sh -c 'echo "$0" > ${urlFile}'`;
   if (process.platform === 'win32') {
-    opener = path.join(dir, `${name}-${randomUUID()}.cmd`);
-    fs.writeFileSync(opener, `@echo %~1>"${urlFile}"\r\n`);
+    const script = path.join(dir, `${name}-${randomUUID()}.mjs`);
+    fs.writeFileSync(
+      script,
+      `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(urlFile)}, process.argv[2]);\n`,
+    );
+    opener = `"${process.execPath}" "${script}"`;
   }
   const child = spawn(python, [mcpScript, '--launch', '--socket', socketPath, '--workspace', project], {
     cwd, env: { ...process.env, READIT_OPEN: opener }, stdio: ['pipe', 'pipe', 'inherit'] });
@@ -121,10 +125,6 @@ test('two sessions launch separate windows with their own tours', async ({ page,
 });
 
 test('a closed window is reopened on the next call', async ({ page, context }) => {
-  test.skip(
-    process.platform === 'win32',
-    'Windows browsers keep the closed page stream alive past this lifecycle assertion.',
-  );
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-'));
   fs.chmodSync(dir, 0o700);
   const project = makeProject({ 'a.py': 'alpha = 1\n' });

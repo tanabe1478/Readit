@@ -307,7 +307,14 @@ class Launcher:
             if workspace is not None:
                 self.workspace = workspace
             self.start()
-        if not self.window_ready():
+        ready = self.window_ready()
+        if ready and windows_pipe(self.endpoint):
+            # A Windows browser can finish an in-flight state request while its
+            # unload beacon is already queued. Recheck after that short handoff
+            # before deciding that no window needs to be reopened.
+            time.sleep(0.1)
+            ready = self.window_ready()
+        if not ready:
             self.open_window()
             deadline = time.monotonic() + self.wait
             while not self.window_ready():
@@ -385,8 +392,12 @@ class Launcher:
         self.opened = time.monotonic()
         self.answered = False
         if sys.platform == "win32":
-            command = (["cmd", "/c", "start", "", self.url] if self.opener is None else
-                       [self.opener, self.url])
+            if self.opener is None:
+                command = ["cmd", "/c", "start", "", self.url]
+            else:
+                parts = shlex.split(self.opener, posix=False)
+                command = [part[1:-1] if len(part) >= 2 and part[0] == part[-1] == '"' else part
+                           for part in parts] + [self.url]
         else:
             command = [*shlex.split(self.opener), self.url]
         subprocess.Popen(command, stdin=subprocess.DEVNULL,

@@ -183,7 +183,26 @@ export function wire() {
 }
 
 export function connectEvents() {
-  const source = new EventSource('/api/events?token=' + encodeURIComponent(token));
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const windowId = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  const source = new EventSource(
+    '/api/events?token=' + encodeURIComponent(token) + '&window=' + windowId,
+  );
+  let detached = false;
+  const detach = () => {
+    if (detached) return;
+    detached = true;
+    source.close();
+    navigator.sendBeacon('/api/detach', JSON.stringify({ token, window: windowId }));
+  };
+  // Start the release before navigation completes when no confirmation can
+  // cancel it. Dirty pages wait for pagehide so canceling the prompt keeps the
+  // active window attached.
+  window.addEventListener('beforeunload', () => {
+    if (!(wasm.exports && wasm.exports.has_unsaved())) detach();
+  });
+  window.addEventListener('pagehide', detach, { once: true });
+  window.addEventListener('unload', detach, { once: true });
   source.onopen = () => send('stream', { state: 'open' });
   source.addEventListener('control', (e) => send('control', JSON.parse(e.data)));
   source.addEventListener('superseded', () => { send('stream', { state: 'superseded' }); source.close(); });

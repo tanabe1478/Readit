@@ -112,7 +112,12 @@ export const test = base.extend({
     await use({ ...server, errors });
     expect(errors, 'page errors').toEqual([]);
     server.stop();
-    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(project, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === 'win32' ? 20 : 0,
+      retryDelay: 100,
+    });
   }, { auto: true }],
 });
 export { expect };

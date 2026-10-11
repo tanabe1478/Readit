@@ -17,10 +17,11 @@ struct Control {
 struct Window {
   mut stream : Int?
   mut generation : Int
+  mut owner : String
 }
 
 ///|
-let window : Window = { stream: None, generation: 0, }
+let window : Window = { stream: None, generation: 0, owner: "", }
 
 ///|
 /// Push one server-sent event to the attached window.

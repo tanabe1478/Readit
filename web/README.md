@@ -99,6 +99,7 @@ AI のセッションごとに専用の Readit を使う場合は、`python3 ../
 
 - 待受は `127.0.0.1` のみです。Host ヘッダーが loopback 以外の要求は拒否します（DNS rebinding 対策）。
 - ページには起動ごとのトークンが埋め込まれ、API はこのトークンなしでは応答しません。他のサイトのページから API を呼べないようにするためです。
+- 各画面はランダムなwindow IDでSSEを所有し、終了時に認証付きbeaconで明示的に解除します。古い画面の遅延した解除は、新しい画面の接続を外せません。
 - Content-Security-Policy で、同一オリジン以外の読み込みを禁止しています。
 - ファイル操作の検査（シンボリックリンクの除外、外部で変更されたファイルへの上書き拒否、予約領域の保護）はネイティブ版と同じです。
 
@@ -110,7 +111,7 @@ npm run test:e2e               # Playwright（Chromium と WebKit）
 READIT_TEST_JAVA=1 npm run test:e2e   # Java の LSP テストも実行
 ```
 
-E2E テストは一時ディレクトリにプロジェクトを作り、実際のサーバーと wasm の画面を操作します。ネイティブ版の `src/ui.rs` と `src/ui_e2e_tests.rs` にある制御・ガイドのテストを、同じ手順で移植しています。LSP のテストは `tools/lsp` が無い場合は飛ばします。Windowsではブラウザが閉じたSSEを保持する時間が一定しないため、「画面を閉じた直後の未接続判定」と「次の呼び出しによるタブ再表示」の2ケースは未検証です。named pipe経由のMCP、質問待機、複数セッション、Chromium／WebKitの画面操作は実行します。
+E2E テストは一時ディレクトリにプロジェクトを作り、実際のサーバーと wasm の画面を操作します。ネイティブ版の `src/ui.rs` と `src/ui_e2e_tests.rs` にある制御・ガイドのテストを、同じ手順で移植しています。LSP のテストは `tools/lsp` が無い場合は飛ばします。Windowsでもnamed pipe経由のMCP、質問待機、複数セッション、画面を閉じた直後の未接続判定と再表示、Chromium／WebKitの画面操作を実行します。
 
 確認したブラウザ: Playwright の Chromium と WebKit 26.6（Safari 26 相当）。Firefox は未確認です。wasm-gc と JS String Builtins に対応したブラウザが必要です。
 

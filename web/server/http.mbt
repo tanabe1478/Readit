@@ -102,6 +102,19 @@ fn url_path(url : String) -> String {
 }
 
 ///|
+fn valid_window_id(value : String) -> Bool {
+  if value.length() != 32 {
+    return false
+  }
+  for c in value {
+    if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+      return false
+    }
+  }
+  true
+}
+
+///|
 fn respond_json(id : Int, status : Int, body : Json) -> Unit {
   http_respond(
     id,
@@ -131,7 +144,27 @@ fn Server::handle(
       respond_json(id, 403, { "error": "invalid token" })
       return
     }
-    attach_window(id)
+    let owner = query_param(url, "window")
+    if !valid_window_id(owner) {
+      respond_json(id, 400, { "error": "invalid window id" })
+      return
+    }
+    attach_window(id, owner)
+    return
+  }
+  if path == "/api/detach" {
+    let args = @json.parse(body) catch { _ => Json::object(Map([])) }
+    if op != "POST" || field(args, "token") != Some(Json::string(self.token)) {
+      respond_json(id, 403, { "error": "invalid token" })
+      return
+    }
+    match field(args, "window") {
+      Some(String(owner)) if valid_window_id(owner) => {
+        detach_window(owner)
+        respond_json(id, 200, { "ok": true })
+      }
+      _ => respond_json(id, 400, { "error": "invalid window id" })
+    }
     return
   }
   if @core.starts_with(path, "/api/") {
@@ -184,7 +217,7 @@ fn Server::handle(
 
 ///|
 /// The newest window answers control requests; an older one is told to stand by.
-fn attach_window(id : Int) -> Unit {
+fn attach_window(id : Int, owner : String) -> Unit {
   if window.stream is Some(old) {
     ignore(http_write(old, "event: superseded\ndata: {}\n\n"))
     http_end(old)
@@ -199,9 +232,14 @@ fn attach_window(id : Int) -> Unit {
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
       } : Json).stringify(),
-    () => if window.generation == generation { window.stream = None },
+    () =>
+      if window.generation == generation {
+        window.stream = None
+        window.owner = ""
+      },
   )
   window.stream = Some(id)
+  window.owner = owner
   ignore(http_write(id, ": connected\n\n"))
   fn keepalive() {
     if window.generation == generation && window.stream is Some(s) {
@@ -211,4 +249,21 @@ fn attach_window(id : Int) -> Unit {
   }
 
   set_timeout(() => keepalive(), 15000) |> ignore
+}
+
+///|
+/// Browsers can retain an SSE connection briefly after a page closes. The page
+/// explicitly releases only its own attachment; an old superseded page cannot
+/// detach the newer window.
+fn detach_window(owner : String) -> Unit {
+  if owner != window.owner {
+    return
+  }
+  window.generation += 1
+  let old = window.stream
+  window.stream = None
+  window.owner = ""
+  if old is Some(id) {
+    http_end(id)
+  }
 }

@@ -346,10 +346,6 @@ test.describe('MCP stdio relay', () => {
 test.describe('without a browser window', () => {
   test.use({ files: { 'a.py': 'a = 1\n' } });
   test('requests fail clearly when no window is attached', async ({ page, readit }) => {
-    test.skip(
-      process.platform === 'win32',
-      'Windows browsers keep the closed page stream alive past this lifecycle assertion.',
-    );
     await page.close();
     await expect.poll(
       async () => (await control(readit.socketPath, 'readit_state')).error,
