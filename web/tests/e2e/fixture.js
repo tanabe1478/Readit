@@ -1,6 +1,7 @@
 // Starts a Readit server on a copy of a project and opens it in the page.
 import { test as base, expect } from '@playwright/test';
 import { spawn, execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -9,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const repo = path.dirname(web);
+export const python = process.platform === 'win32' ? 'python' : 'python3';
 
 export function makeProject(files, { git = false } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'readit-e2e-')));
@@ -18,7 +20,7 @@ export function makeProject(files, { git = false } = {}) {
   }
   if (git) {
     const run = (...args) => execFileSync('git', ['-C', dir, ...args], {
-      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }, stdio: 'ignore' });
+      env: { ...process.env, GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }, stdio: 'ignore' });
     run('init', '-q');
     run('add', '.');
     run('-c', 'user.name=Readit Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'baseline');
@@ -44,9 +46,13 @@ export async function startServer(project, { socket = true, env = {} } = {}) {
   let socketPath = '';
   let socketDir = '';
   if (socket) {
-    socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readit-sock-'));
-    fs.chmodSync(socketDir, 0o700);
-    socketPath = path.join(socketDir, 'control.sock');
+    if (process.platform === 'win32') {
+      socketPath = `\\\\.\\pipe\\readit-e2e-${process.pid}-${randomUUID()}`;
+    } else {
+      socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readit-sock-'));
+      fs.chmodSync(socketDir, 0o700);
+      socketPath = path.join(socketDir, 'control.sock');
+    }
   }
   const args = [path.join(web, 'dist/server.js'), '--web-root', web, '--port', '0', project];
   if (socket) args.push('--control-socket', socketPath);

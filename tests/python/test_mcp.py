@@ -17,7 +17,8 @@ class ProtocolTests(unittest.TestCase):
     def exchange(self, messages):
         source = io.BytesIO(b"\n".join(json.dumps(m).encode() for m in messages) + b"\n")
         output = io.StringIO()
-        mcp.serve("/missing/readit.sock", source, output)
+        endpoint = r"\\.\pipe\readit-missing-test" if os.name == "nt" else "/missing/readit.sock"
+        mcp.serve(endpoint, source, output)
         return [json.loads(line) for line in output.getvalue().splitlines()]
 
     def init(self):
@@ -154,9 +155,12 @@ class ProtocolTests(unittest.TestCase):
                        "params": {"protocolVersion": "2025-11-25", "clientInfo": {"name": "Claude Code"}}})
         self.assertEqual(launcher.label, "Claude Code")
         path = mcp.Launcher.default_socket(launcher.label)
-        self.assertTrue(pathlib.Path(path).name.startswith("claude-code-"))
-        self.assertEqual(pathlib.Path(path).parent, pathlib.Path.home() / ".readit/sessions")
-        self.assertLess(len(path.encode()), 104)  # Unix socket path limit on macOS.
+        if os.name == "nt":
+            self.assertTrue(path.startswith(r"\\.\pipe\readit-claude-code-"))
+        else:
+            self.assertTrue(pathlib.Path(path).name.startswith("claude-code-"))
+            self.assertEqual(pathlib.Path(path).parent, pathlib.Path.home() / ".readit/sessions")
+            self.assertLess(len(path.encode()), 104)  # Unix socket path limit on macOS.
         # An explicit label wins over the client's name.
         named = mcp.Launcher(None, "/repo", "pi")
         mcp.Server(None, named).handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -171,6 +175,7 @@ class ProtocolTests(unittest.TestCase):
         replies = self.exchange([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}])
         self.assertEqual(replies[0]["error"]["code"], -32600)
 
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix socket fixture")
     def test_forwards_utf8_and_unsaved_result(self):
         with tempfile.TemporaryDirectory(prefix="rd-mcp-", dir="/tmp") as directory:
             endpoint = str(pathlib.Path(directory) / "s")

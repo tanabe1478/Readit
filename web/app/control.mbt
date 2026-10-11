@@ -259,7 +259,10 @@ fn control_open_folder(
   args : Json,
   reply : (Result[Json, String]) -> Unit,
 ) -> Unit {
-  guard json_text(args, "path") is Some(path) && @core.starts_with(path, "/") else {
+  guard json_text(args, "path") is Some(path) &&
+    (@core.starts_with(path, "/") ||
+    @core.starts_with(path, "\\\\") ||
+    (path.length() >= 3 && path[1] == ':' && (path[2] == '/' || path[2] == '\\'))) else {
     reply(Err("path must be an absolute folder path"))
     return
   }

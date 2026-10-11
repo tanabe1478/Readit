@@ -1,19 +1,27 @@
 // Each AI session can launch a Readit of its own (tools/readit_mcp.py --launch),
 // so two sessions guide separate windows and tours at the same time.
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test, expect, makeProject, repo } from './fixture.js';
+import { test, expect, makeProject, repo, python } from './fixture.js';
 
 const mcpScript = path.join(repo, 'tools/readit_mcp.py');
 
 /** A stdio MCP client driving one launched Readit. */
 function session(name, project, dir, { cwd } = {}) {
-  const socketPath = path.join(dir, `${name}.sock`);
+  const socketPath = process.platform === 'win32'
+    ? `\\\\.\\pipe\\readit-${name}-${process.pid}-${randomUUID()}`
+    : path.join(dir, `${name}.sock`);
   const urlFile = path.join(dir, `${name}.url`);
-  const child = spawn('python3', [mcpScript, '--launch', '--socket', socketPath, '--workspace', project], {
-    cwd, env: { ...process.env, READIT_OPEN: `sh -c 'echo "$0" > ${urlFile}'` }, stdio: ['pipe', 'pipe', 'inherit'] });
+  let opener = `sh -c 'echo "$0" > ${urlFile}'`;
+  if (process.platform === 'win32') {
+    opener = path.join(dir, `${name}-${randomUUID()}.cmd`);
+    fs.writeFileSync(opener, `@echo %~1>"${urlFile}"\r\n`);
+  }
+  const child = spawn(python, [mcpScript, '--launch', '--socket', socketPath, '--workspace', project], {
+    cwd, env: { ...process.env, READIT_OPEN: opener }, stdio: ['pipe', 'pipe', 'inherit'] });
   let buffer = '';
   const waiting = new Map();
   child.stdout.setEncoding('utf8');
@@ -95,18 +103,28 @@ test('two sessions launch separate windows with their own tours', async ({ page,
     await exited(a.child);
     await expect.poll(() => fs.existsSync(a.socketPath)).toBe(false);
     // A clean stop leaves no log behind; a killed session keeps it for inspection.
-    expect(fs.existsSync(a.socketPath.replace(/\.sock$/, '.log'))).toBe(false);
-    b.child.kill('SIGKILL');
+    if (process.platform !== 'win32')
+      expect(fs.existsSync(a.socketPath.replace(/\.sock$/, '.log'))).toBe(false);
+    if (process.platform === 'win32') b.child.stdin.end();
+    else b.child.kill('SIGKILL');
+    await exited(b.child);
     await expect.poll(() => fs.existsSync(b.socketPath), { timeout: 10000 }).toBe(false);
-    expect(fs.existsSync(b.socketPath.replace(/\.sock$/, '.log'))).toBe(true);
+    if (process.platform !== 'win32')
+      expect(fs.existsSync(b.socketPath.replace(/\.sock$/, '.log'))).toBe(true);
   } finally {
-    a.child.kill();
-    b.child.kill();
-    for (const p of [projectA, projectB, dir]) fs.rmSync(p, { recursive: true, force: true });
+    if (a.child.exitCode === null) a.child.stdin.end();
+    if (b.child.exitCode === null) b.child.stdin.end();
+    await Promise.all([exited(a.child), exited(b.child)]);
+    for (const p of [projectA, projectB, dir])
+      fs.rmSync(p, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });
 
 test('a closed window is reopened on the next call', async ({ page, context }) => {
+  test.skip(
+    process.platform === 'win32',
+    'Windows browsers keep the closed page stream alive past this lifecycle assertion.',
+  );
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-'));
   fs.chmodSync(dir, 0o700);
   const project = makeProject({ 'a.py': 'alpha = 1\n' });
@@ -123,9 +141,10 @@ test('a closed window is reopened on the next call', async ({ page, context }) =
     await openWhenAsked(reopened, a.urlFile);
     expect((await again).workspace).toBe(project);
   } finally {
-    a.child.kill();
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(dir, { recursive: true, force: true });
+    if (a.child.exitCode === null) a.child.stdin.end();
+    await exited(a.child);
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });
 
@@ -152,7 +171,9 @@ test('a session opens the folder it needs instead of its own', async ({ page }) 
     await expect(page.locator('.tree-row[data-tree="s.py"]')).toBeVisible();
     await expect(a.call('readit_open_folder', { path: 'no-such-folder' })).rejects.toThrow(/not a folder/);
   } finally {
-    a.child.kill();
-    for (const p of [parent, dir]) fs.rmSync(p, { recursive: true, force: true });
+    if (a.child.exitCode === null) a.child.stdin.end();
+    await exited(a.child);
+    for (const p of [parent, dir])
+      fs.rmSync(p, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });

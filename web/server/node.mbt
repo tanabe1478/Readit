@@ -126,6 +126,13 @@ pub extern "js" fn path_dirname(p : String) -> String = "(p) => globalThis.__rea
 pub extern "js" fn path_is_absolute(p : String) -> Bool = "(p) => globalThis.__readit.path.isAbsolute(p)"
 
 ///|
+/// Compare canonical absolute paths with the host platform's separator and
+/// case rules. A textual '/' prefix check rejects every child on Windows.
+pub extern "js" fn path_is_inside(root : String, child : String) -> Bool =
+  #|(root, child) => { const p = globalThis.__readit.path; const rel = p.relative(root, child);
+  #|  return rel === '' || (!p.isAbsolute(rel) && rel !== '..' && !rel.startsWith('..' + p.sep)); }
+
+///|
 pub extern "js" fn cwd() -> String = "() => process.cwd()"
 
 // ---- files ----
@@ -501,11 +508,18 @@ pub extern "js" fn http_write(id : Int, chunk : String) -> Bool = "(id, c) => { 
 ///|
 pub extern "js" fn http_end(id : Int) -> Unit = "(id) => { const res = globalThis.__readit.handles.get(id); if (res && !res.writableEnded) res.end(); }"
 
-// ---- Unix sockets ----
+// ---- Local IPC (Unix sockets or Windows named pipes) ----
 
 ///|
-/// Listen on a Unix socket. Each connection gets an id; `on_line` receives the
-/// first line (without the newline) or "\u{0}" and a reason when it is invalid.
+/// A Windows named pipe is not a filesystem entry. Keep its name deliberately
+/// narrow; Node's default named-pipe ACL limits access to the creating user.
+pub extern "js" fn windows_pipe_path(p : String) -> Bool =
+  #|(p) => { const b = String.fromCharCode(92); const prefix = b + b + '.' + b + 'pipe' + b;
+  #|  return process.platform === 'win32' && p.startsWith(prefix) && /^[A-Za-z0-9._-]{1,200}$/.test(p.slice(prefix.length)); }
+
+///|
+/// Listen on a Unix socket or Windows named pipe. Each connection gets an id;
+/// `on_line` receives the first line (without the newline) or "\u{0}" and a reason when it is invalid.
 extern "js" fn js_unix_listen(
   file : String,
   max_bytes : Int,

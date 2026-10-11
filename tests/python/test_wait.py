@@ -57,6 +57,7 @@ def tour_state(sequence, guide=True):
             "guide_tour": {"id": "tour", "index": 1, "visited_through": 1} if guide else None}
 
 
+@unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix socket fixture; Windows pipe is covered by web E2E")
 class WaitTests(unittest.TestCase):
     def run_wait(self, editor, **options):
         options = {"after": None, "interval": 0, "timeout": 0, "stop_when_idle": False, **options}

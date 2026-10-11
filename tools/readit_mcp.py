@@ -16,11 +16,17 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 MAX_FRAME = 262_144
 MAX_RESPONSE = 4 * 1024 * 1024
+
+if sys.platform == "win32":
+    # Pipes carry UTF-8; do not let the active Windows code page corrupt MCP JSON.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 
 def string(description):
@@ -198,16 +204,62 @@ def validate_tour(arguments, revising):
         raise RpcError(-32602, "claim ids must be unique")
 
 
+def windows_pipe(endpoint):
+    """Whether endpoint is a local Windows named pipe accepted by Readit."""
+    prefix = "\\\\.\\pipe\\"
+    return sys.platform == "win32" and endpoint.startswith(prefix)
+
+
+def pipe_exchange(endpoint, payload, timeout):
+    """Exchange one frame over a same-user Windows named pipe.
+
+    Node creates the pipe without readableAll/writableAll, so Windows applies the
+    creating user's default pipe ACL. Python does not expose timed named-pipe I/O;
+    use one daemon thread so a stale browser connection cannot block the MCP loop.
+    The server bounds and eventually closes that outstanding connection.
+    """
+    result = []
+
+    def exchange():
+        try:
+            with open(endpoint, "r+b", buffering=0) as stream:
+                stream.write(payload)
+                response = bytearray()
+                while len(response) <= MAX_RESPONSE:
+                    chunk = stream.read(min(65_536, MAX_RESPONSE + 1 - len(response)))
+                    if not chunk:
+                        break
+                    response.extend(chunk)
+                    if b"\n" in chunk:
+                        break
+            result.append((True, bytes(response)))
+        except Exception as error:
+            result.append((False, error))
+
+    worker = threading.Thread(target=exchange, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise socket.timeout("named pipe response timed out")
+    ok, value = result[0]
+    if not ok:
+        raise value
+    return value
+
+
 def editor_call(endpoint, name, arguments, timeout=60):
     payload = json.dumps({"method": name, "arguments": arguments}, ensure_ascii=False).encode() + b"\n"
     if len(payload) > MAX_FRAME:
         raise ValueError("request is too large")
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(timeout)
-        client.connect(endpoint)
-        client.sendall(payload)
-        with client.makefile("rb") as stream:
-            response = stream.readline(MAX_RESPONSE + 1)
+    if windows_pipe(endpoint):
+        response = pipe_exchange(endpoint, payload, timeout)
+    else:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(timeout)
+            client.connect(endpoint)
+            client.sendall(payload)
+            with client.makefile("rb") as stream:
+                response = stream.readline(MAX_RESPONSE + 1)
     if len(response) > MAX_RESPONSE or not response.endswith(b"\n"):
         raise ValueError("invalid or oversized editor response")
     data = json.loads(response)
@@ -227,7 +279,8 @@ class Launcher:
         self.label = label
         self.web = web or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
         self.node = node or os.environ.get("READIT_NODE") or "node"
-        self.opener = opener or os.environ.get("READIT_OPEN") or ("open" if sys.platform == "darwin" else "xdg-open")
+        self.opener = opener or os.environ.get("READIT_OPEN") or (
+            "open" if sys.platform == "darwin" else None if sys.platform == "win32" else "xdg-open")
         self.wait = wait
         self.child = None
         self.url = None
@@ -237,7 +290,10 @@ class Launcher:
     @staticmethod
     def default_socket(label):
         name = re.sub(r"[^a-z0-9-]+", "-", label.lower()).strip("-")[:24] or "session"
-        return os.path.expanduser(f"~/.readit/sessions/{name}-{os.getpid()}-{secrets.token_hex(2)}.sock")
+        suffix = f"{name}-{os.getpid()}-{secrets.token_hex(8)}"
+        if sys.platform == "win32":
+            return rf"\\.\pipe\readit-{suffix}"
+        return os.path.expanduser(f"~/.readit/sessions/{suffix}.sock")
 
     def ensure(self, workspace=None):
         """Start the server if it is not running, then wait until a window answers.
@@ -261,6 +317,9 @@ class Launcher:
 
     def listening(self):
         try:
+            if windows_pipe(self.endpoint):
+                with open(self.endpoint, "r+b", buffering=0):
+                    return True
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
                 probe.connect(self.endpoint)
             return True
@@ -281,15 +340,23 @@ class Launcher:
             raise
 
     def start(self):
-        directory = os.path.dirname(self.endpoint)
+        if windows_pipe(self.endpoint):
+            directory = os.path.expanduser("~/.readit/sessions")
+        else:
+            directory = os.path.dirname(self.endpoint)
         os.makedirs(directory, mode=0o700, exist_ok=True)
-        os.chmod(directory, 0o700)
-        if os.path.exists(self.endpoint):
+        if sys.platform != "win32":
+            os.chmod(directory, 0o700)
+        if not windows_pipe(self.endpoint) and os.path.exists(self.endpoint):
             os.unlink(self.endpoint)  # Nothing listens on it: left behind by a crashed server.
         server = os.path.join(self.web, "dist/server.js")
         if not os.path.exists(server):
             raise ValueError(f"Readit web is not built: run npm install and npm run build in {self.web}")
-        log_path = self.log_path = os.path.splitext(self.endpoint)[0] + ".log"
+        if windows_pipe(self.endpoint):
+            name = self.endpoint.rsplit("\\", 1)[-1]
+            log_path = self.log_path = os.path.join(directory, name + ".log")
+        else:
+            log_path = self.log_path = os.path.splitext(self.endpoint)[0] + ".log"
         with open(log_path, "w") as log:
             self.child = subprocess.Popen(
                 [self.node, server, "--web-root", self.web, "--port", "0", "--label", self.label,
@@ -317,7 +384,12 @@ class Launcher:
             return
         self.opened = time.monotonic()
         self.answered = False
-        subprocess.Popen([*shlex.split(self.opener), self.url], stdin=subprocess.DEVNULL,
+        if sys.platform == "win32":
+            command = (["cmd", "/c", "start", "", self.url] if self.opener is None else
+                       [self.opener, self.url])
+        else:
+            command = [*shlex.split(self.opener), self.url]
+        subprocess.Popen(command, stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def close(self, keep_log=False):
@@ -477,7 +549,8 @@ if __name__ == "__main__":
     if options.launch:
         launcher = Launcher(options.socket, os.path.abspath(options.workspace), options.label)
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-        signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
     try:
         serve(options.socket, sys.stdin.buffer, sys.stdout, launcher)
     finally:

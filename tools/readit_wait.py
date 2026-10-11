@@ -24,17 +24,39 @@ import time
 
 MAX_RESPONSE = 4 * 1024 * 1024
 
+if sys.platform == "win32":
+    # The parent process reads JSON as UTF-8, independent of the active code page.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
+
+def windows_pipe(endpoint):
+    return sys.platform == "win32" and endpoint.startswith("\\\\.\\pipe\\")
+
 
 def call(endpoint, method, arguments):
     payload = json.dumps({"method": method, "arguments": arguments}, ensure_ascii=False).encode() + b"\n"
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(60)
-        client.connect(endpoint)
-        client.sendall(payload)
-        with client.makefile("rb") as stream:
-            response = stream.readline(MAX_RESPONSE + 1)
-    if not response.endswith(b"\n"):
-        raise ValueError("invalid editor response")
+    if windows_pipe(endpoint):
+        with open(endpoint, "r+b", buffering=0) as stream:
+            stream.write(payload)
+            response = bytearray()
+            while len(response) <= MAX_RESPONSE:
+                chunk = stream.read(min(65_536, MAX_RESPONSE + 1 - len(response)))
+                if not chunk:
+                    break
+                response.extend(chunk)
+                if b"\n" in chunk:
+                    break
+        response = bytes(response)
+    else:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(60)
+            client.connect(endpoint)
+            client.sendall(payload)
+            with client.makefile("rb") as stream:
+                response = stream.readline(MAX_RESPONSE + 1)
+    if len(response) > MAX_RESPONSE or not response.endswith(b"\n"):
+        raise ValueError("invalid or oversized editor response")
     data = json.loads(response)
     if "error" in data:
         raise ValueError(data["error"])

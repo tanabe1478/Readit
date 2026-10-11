@@ -30,7 +30,7 @@ MCPクライアントのstdio設定例（絶対パスは環境に合わせて変
 
 MCPクライアントごとの設定形式に合わせてこのcommandとargsを登録します。ReaditはAIプロバイダーに依存しません。Python 3.10以上の標準ライブラリだけで動作します。
 
-`--control-socket`を指定しない起動では、外部操作の待受を作りません。指定時は同じユーザーがアクセスできるプライベートなUnix socketを作ります。
+`--control-socket`を指定しない起動では、外部操作の待受を作りません。指定時はlocal IPCだけを作ります。Unixでは親ディレクトリ700・socket 600、WindowsではNodeの既定ACLで作成ユーザーに限定した `\\.\pipe\readit-*` named pipeです。Windowsでも制御用TCP portは公開しません。
 Web版の画面用のHTTPは `127.0.0.1` だけで待ち受け、起動ごとのトークンとHostヘッダーの確認で、他のサイトのページからの操作を拒否します。要求はブラウザで開いている画面が処理し、画面を開いていない間は「Readit is not open in a browser」を返します。
 旧版（ネイティブ版）は `./artifacts/Readit.app/Contents/MacOS/Readit --control-socket ...` で同じように接続できます。
 別のReaditには別のsocketを指定します。既存のsocketは上書きしません。クラッシュで残った場合は、そのReaditプロセスが終了していることを確認してからsocketファイルを削除してください。通常終了時には自動で削除します。
@@ -47,12 +47,12 @@ claude mcp add --transport stdio --scope user readit -- \
 
 - 起動するのは最初のツール呼び出しのときです。`web/dist/server.js` を空いているポートで起動し、ブラウザでタブを開き、画面が応答するまで最大20秒待ちます。ツールを使わないセッションでは何も起動しません。
 - 開くフォルダは `--workspace`、指定がなければMCPサーバーの作業ディレクトリです。最初のツール呼び出しが `readit_open_folder` なら、そのフォルダで起動します。
-- socketは `--socket` で指定できます。指定がなければ `~/.readit/sessions/<名前>-<pid>-<乱数>.sock` を作ります（ログは同じ名前の `.log`）。`readit_state` の結果に `control_socket` として入るので、`readit_wait.py --socket` にそのまま渡せます。同じ結果の `wait_command` は、そのまま実行できる待機コマンド全体です。
+- socketは `--socket` で指定できます。指定がなければUnixでは `~/.readit/sessions/<名前>-<pid>-<乱数>.sock`、Windowsではランダムな `\\.\pipe\readit-*` named pipeを作ります（ログはユーザーの `~/.readit/sessions/`）。`readit_state` の結果に `control_socket` として入るので、`readit_wait.py --socket` にそのまま渡せます。同じ結果の `wait_command` は、そのまま実行できる待機コマンド全体です。
 - 画面の名前は `--label`、指定がなければMCPクライアントが名乗った名前（`clientInfo.name`）です。タブのタイトルとヘッダーに出るので、どのセッションの画面か見分けられます。
 - タブを閉じた後にツールを呼ぶと、タブを開き直します。
 - セッションが終わると（標準入力が閉じる、SIGTERM、SIGHUP）Readitを止めます。MCPサーバーが強制終了された場合も、Readitは標準入力の切断を検知して止まります（サーバーの `--exit-with-stdin`）。ガイドはメモリ内にあるので、セッションの終了とともに消えます。
 - `READIT_SOCKET` を設定して起動すると、`--launch` でも起動せずにその socket のReaditへつなぎます。手で起動した画面（`readit` ランチャーなど）を、応答のたびに終わる `claude -p` のような使い方でも共有できます。
-- ブラウザを開くコマンドは `READIT_OPEN`（既定は macOS で `open`、他は `xdg-open`）、Node.js は `READIT_NODE`（既定は `node`）で変えられます。
+- ブラウザを開くコマンドは `READIT_OPEN`（既定はmacOSで`open`、Windowsで`start`、その他で`xdg-open`）、Node.jsは `READIT_NODE`（既定は`node`）で変えられます。
 
 `--launch` を付けない場合は従来どおり、`--socket` のReaditに接続します。手で起動した1つの画面を複数のセッションで共有すると、質問はすべてのセッションに届き、ツアーは後から登録した側で置き換わります。
 
@@ -99,7 +99,7 @@ claude mcp add --transport stdio --scope user readit -- \
 今回のMCPは閲覧・ナビゲーション操作です。ファイル編集・保存・削除・シェル実行・AI推論のAPIは含みません。人間による通常の編集機能は引き続き使えます。
 LSPの対象言語や読み込めるファイルの上限はエディター本体と共通です。対応していないシンボル解析を文字列検索で代用して成功扱いにはしません。
 
-MCP stdioは[公式transport仕様](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)に従う改行区切りJSON-RPCです。initialize、initialized、ping、tools/list、tools/callを実装しています。MCPプロセスとGUI間はアプリ内のUnix socket APIです。
+MCP stdioは[公式transport仕様](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)に従う改行区切りJSON-RPCです。initialize、initialized、ping、tools/list、tools/callを実装しています。MCPプロセスとGUI間はlocal IPC（Unix socketまたはWindows named pipe）です。
 
 ## 一連の解説をまとめて登録する
 

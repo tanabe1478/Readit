@@ -82,15 +82,7 @@ fn components(relative : String) -> Array[String]? {
 
 ///|
 fn is_inside(root : String, path : String) -> Bool {
-  path == root ||
-  @core.starts_with(
-    path,
-    if @core.ends_with(root, "/") {
-      root
-    } else {
-      root + "/"
-    },
-  )
+  path_is_inside(root, path)
 }
 
 ///|

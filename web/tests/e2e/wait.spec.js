@@ -2,7 +2,7 @@
 // tools/readit_wait.py (Claude Code runs it in the background) and the pi extension's loop.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { test, expect, ok, repo } from './fixture.js';
+import { test, expect, ok, repo, python } from './fixture.js';
 import { ReaditWatcher, formatPrompt } from '../../../integrations/pi/watcher.ts';
 
 const waitScript = path.join(repo, 'tools/readit_wait.py');
@@ -24,7 +24,7 @@ async function ask(page, text) {
 test('readit_wait.py returns the question and, when the guide ends, ended', async ({ page, readit }) => {
   await loadTour(readit.socketPath);
   const run = (args) => new Promise((resolve) => {
-    const child = spawn('python3', [waitScript, '--socket', readit.socketPath, '--interval', '0.1', ...args]);
+    const child = spawn(python, [waitScript, '--socket', readit.socketPath, '--interval', '0.1', ...args]);
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
     child.on('exit', () => resolve(JSON.parse(out.trim())));
@@ -44,7 +44,7 @@ test('readit_wait.py returns the question and, when the guide ends, ended', asyn
 
 test('the pi watcher delivers each question once and keeps waiting', async ({ page, readit }) => {
   const delivered = [];
-  const watcher = new ReaditWatcher({ python: 'python3', script: waitScript, socket: readit.socketPath,
+  const watcher = new ReaditWatcher({ python, script: waitScript, socket: readit.socketPath,
     deliver: (prompt) => delivered.push(prompt), notify: () => {} });
   watcher.start();
   try {
@@ -74,7 +74,7 @@ test('a recorded prediction does not wake readit_wait.py; a question still does'
   await ok(readit.socketPath, 'readit_guide_load', { workspace: state.workspace, id: 'tour', event_sequence: state.guide_event_sequence,
     steps: [{ id: 'guess', kind: 'prediction', prompt: 'どうなる？', title: 'guess', body: '解説', path: 'sample.py', line: 1, column: 1, expected_text: 'one = 1' },
       { id: 'two', title: 'two', body: '解説', path: 'sample.py', line: 2, column: 1, expected_text: 'two = 2' }] });
-  const child = spawn('python3', [waitScript, '--socket', readit.socketPath, '--interval', '0.1', '--stop-when-idle']);
+  const child = spawn(python, [waitScript, '--socket', readit.socketPath, '--interval', '0.1', '--stop-when-idle']);
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   const exited = new Promise((resolve) => child.on('exit', resolve));

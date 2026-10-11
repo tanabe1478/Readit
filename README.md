@@ -14,8 +14,8 @@ npm run build
 npm start -- /absolute/path/to/repository --control-socket ~/.readit/control.sock
 ```
 
-MoonBit（`moon`）、Node.js 24、npm、Gitが必要です。`npm start` は既定のブラウザで `http://127.0.0.1:7420/` を開きます。
-引数を省くと、このリポジトリ内の `demo/` を開きます。詳しくは [web/README.md](web/README.md) を参照してください。
+MoonBit（`moon`）、Node.js 24、npm、Gitが必要です。macOS、Linux、Windows 11で実行できます。`npm start` は既定のブラウザで `http://127.0.0.1:7420/` を開きます。
+引数を省くと、このリポジトリ内の `demo/` を開きます。Windowsの制御接続には同一ユーザー向けnamed pipeを使います。詳しくは [web/README.md](web/README.md) を参照してください。
 
 ## ファイル・閲覧・編集
 

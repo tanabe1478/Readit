@@ -31,21 +31,27 @@ fn push_event(name : String, data : Json) -> Bool {
 
 ///|
 fn Control::bind(path : String) -> Control raise Failure {
-  if !path_is_absolute(path) {
-    fail("control socket must be an absolute path")
+  let windows_pipe = windows_pipe_path(path)
+  if platform() == "win32" && !windows_pipe {
+    fail("control socket must be a \\\\.\\pipe\\readit-* named pipe on Windows")
   }
-  let parent = path_dirname(path)
-  if lstat_kind(parent) == "" {
-    mkdir(parent, mode=0o700) catch {
-      e => fail(e.message())
+  if !windows_pipe {
+    if !path_is_absolute(path) {
+      fail("control socket must be an absolute path")
     }
-  }
-  if lstat_kind(parent) != "dir" || (lstat_mode(parent) & 0o077) != 0 {
-    fail("control socket needs a private directory (mode 700)")
-  }
-  // Do not unlink an existing endpoint: it may belong to another live editor.
-  if lstat_kind(path) != "" {
-    fail("\{path}: address already in use")
+    let parent = path_dirname(path)
+    if lstat_kind(parent) == "" {
+      mkdir(parent, mode=0o700) catch {
+        e => fail(e.message())
+      }
+    }
+    if lstat_kind(parent) != "dir" || (lstat_mode(parent) & 0o077) != 0 {
+      fail("control socket needs a private directory (mode 700)")
+    }
+    // Do not unlink an existing endpoint: it may belong to another live editor.
+    if lstat_kind(path) != "" {
+      fail("\{path}: address already in use")
+    }
   }
   let control = { path, inode: "", pending: Map([]), next: 0, }
   let handler = (conn : Int, line : String) => control.receive(conn, line)
@@ -66,13 +72,17 @@ fn Control::ready(
       done(Err("\{self.path}: \{@core.slice(result, 1, result.length())}"))
       return
     }
-    chmod(self.path, 0o600) catch {
-      e => {
-        done(Err(e.message()))
-        return
+    if windows_pipe_path(self.path) {
+      self.inode = "windows-pipe"
+    } else {
+      chmod(self.path, 0o600) catch {
+        e => {
+          done(Err(e.message()))
+          return
+        }
       }
+      self.inode = inode(self.path)
     }
-    self.inode = inode(self.path)
     done(Ok(()))
   })
 }
@@ -140,7 +150,7 @@ fn Control::answer(self : Control, id : Int, response : Json) -> Unit {
 /// Remove the socket only if it is still the one this process created.
 fn Control::close(self : Control) -> Unit {
   unix_close()
-  if self.inode != "" && inode(self.path) == self.inode {
+  if !windows_pipe_path(self.path) && self.inode != "" && inode(self.path) == self.inode {
     unlink(self.path) catch {
       _ => ()
     }

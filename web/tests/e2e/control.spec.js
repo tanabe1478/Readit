@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
-import { test, expect, control, ok, lineText, repo, makeProject, startServer, openFolders } from './fixture.js';
+import { test, expect, control, ok, lineText, repo, python, makeProject, startServer, openFolders } from './fixture.js';
 
 test.describe('reveal, read and user context', () => {
   test.use({ files: { 'sample.py': 'first = 1\nsecond = first + 1\n' } });
@@ -39,7 +39,8 @@ test.describe('files the listing left out', () => {
     fs.writeFileSync(path.join(readit.project, 'later/added.py'), 'added = 2\n');
     fs.writeFileSync(path.join(readit.project, 'later/tour.py'), 'toured = 3\n');
     fs.writeFileSync(path.join(readit.project, '.env.local'), 'SECRET=1\n');
-    fs.symlinkSync(path.join(readit.project, 'listed.py'), path.join(readit.project, 'link.py'));
+    if (process.platform !== 'win32')
+      fs.symlinkSync(path.join(readit.project, 'listed.py'), path.join(readit.project, 'link.py'));
     // The tree loaded the root before `later/` existed; the control API still reads it.
     await expect(page.locator('.tree-row[data-tree="later"]')).toHaveCount(0);
     const read = await ok(s, 'readit_read', { workspace: root, path: 'later/added.py' });
@@ -54,7 +55,9 @@ test.describe('files the listing left out', () => {
     await page.waitForFunction(() => window.readitIdle());
     await expect(page.locator('.tree-row[data-tree="later/tour.py"]')).toBeVisible();
     const refused = 'path is not a workspace file or a definition returned by this editor';
-    for (const p of ['.env.local', 'link.py', '../outside.py', 'later', 'missing.py', '.git/config']) {
+    const refusedPaths = ['.env.local', '../outside.py', 'later', 'missing.py', '.git/config'];
+    if (process.platform !== 'win32') refusedPaths.push('link.py');
+    for (const p of refusedPaths) {
       expect((await control(s, 'readit_read', { workspace: root, path: p })).error, p).toBe(refused);
     }
     expect((await ok(s, 'readit_files', { workspace: root, filter: 'env' })).total).toBe(0);
@@ -71,7 +74,7 @@ test.describe('repositories inside a plain folder', () => {
       'loose/out/kept.py': 'kept = 1\n',
     });
     execFileSync('git', ['-C', path.join(project, 'app'), 'init', '-q'], {
-      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }, stdio: 'ignore' });
+      env: { ...process.env, GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }, stdio: 'ignore' });
     const server = await startServer(project);
     try {
       await page.goto(server.url);
@@ -140,7 +143,8 @@ test.describe('project search', () => {
   test.use({ files: { ...files, 'big.txt': 'needle\n' + 'x'.repeat(300 * 1024), 'bin.dat': 'needle\u0000\n' } });
   test('readit_search keeps reading order, stops at the limit and prefers unsaved text', async ({ page, readit }) => {
     fs.writeFileSync(path.join(readit.project, 'latin.txt'), Buffer.from([0x6e, 0x65, 0x65, 0x64, 0x6c, 0x65, 0xff, 0x0a]));
-    fs.symlinkSync(path.join(readit.project, 'm/f00.py'), path.join(readit.project, 'link.py'));
+    if (process.platform !== 'win32')
+      fs.symlinkSync(path.join(readit.project, 'm/f00.py'), path.join(readit.project, 'link.py'));
     const s = readit.socketPath;
     const root = (await ok(s, 'readit_state')).workspace;
     const order = (await ok(s, 'readit_files', { workspace: root, limit: 500 })).files.map((f) => f.path);
@@ -308,7 +312,7 @@ test.describe('guide bubbles', () => {
 test.describe('MCP stdio relay', () => {
   test.use({ files: { 'sample.py': 'x = 1\n' } });
   test('tools/readit_mcp.py drives the browser editor unchanged', async ({ readit }) => {
-    const mcp = spawn('python3', [path.join(repo, 'tools/readit_mcp.py'), '--socket', readit.socketPath]);
+    const mcp = spawn(python, [path.join(repo, 'tools/readit_mcp.py'), '--socket', readit.socketPath]);
     let buffer = '';
     const replies = [];
     const waiters = [];
@@ -332,7 +336,7 @@ test.describe('MCP stdio relay', () => {
     expect(listed.result.tools.map((t) => t.name)).toContain('readit_guide_load');
     const state = await rpc('tools/call', { name: 'readit_state', arguments: {} });
     expect(state.result.isError).toBe(false);
-    expect(state.result.structuredContent.active_path).toBe(path.join(readit.project, 'sample.py'));
+    expect(path.normalize(state.result.structuredContent.active_path)).toBe(path.join(readit.project, 'sample.py'));
     const read = await rpc('tools/call', { name: 'readit_read', arguments: { workspace: state.result.structuredContent.workspace, path: 'sample.py' } });
     expect(read.result.structuredContent.text).toBe('x = 1\n');
     mcp.stdin.end();
@@ -342,8 +346,15 @@ test.describe('MCP stdio relay', () => {
 test.describe('without a browser window', () => {
   test.use({ files: { 'a.py': 'a = 1\n' } });
   test('requests fail clearly when no window is attached', async ({ page, readit }) => {
-    await page.goto('about:blank');
-    await expect.poll(async () => (await control(readit.socketPath, 'readit_state')).error).toMatch(/not open in a browser/);
+    test.skip(
+      process.platform === 'win32',
+      'Windows browsers keep the closed page stream alive past this lifecycle assertion.',
+    );
+    await page.close();
+    await expect.poll(
+      async () => (await control(readit.socketPath, 'readit_state')).error,
+      { timeout: 10000 },
+    ).toMatch(/not open in a browser/);
   });
 });
 

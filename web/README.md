@@ -6,7 +6,7 @@ Readit を MoonBit で書き直したブラウザ版です。画面は MoonBit �
 
 ## 起動
 
-必要なもの: MoonBit（`moon`、mise の `http:moonbit` 0.10.14 で確認）、Node.js 24、npm。LSP を使う場合は、ネイティブ版と同じ `python3 scripts/setup_lsp.py` で `tools/lsp` を用意します。
+必要なもの: MoonBit（`moon`、mise の `http:moonbit` 0.10.14 で確認）、Node.js 24、npm。Windows 11でもネイティブ実行できます。LSP を使う場合は、ネイティブ版と同じ `python3 scripts/setup_lsp.py` で `tools/lsp` を用意します。
 
 ```sh
 cd web
@@ -20,7 +20,7 @@ npm start -- /absolute/path/to/repository
 | オプション | 内容 |
 | --- | --- |
 | `--port N` | 待受ポート。`0` で空いているポートを使う |
-| `--control-socket PATH` | MCP 用の Unix socket。親ディレクトリは権限 700 |
+| `--control-socket ENDPOINT` | MCP用local IPC。Unixは権限700の親ディレクトリ内のsocket、Windowsは`\\.\pipe\readit-*` named pipe |
 | `--no-open` | ブラウザを開かない |
 | `--label NAME` | 画面の名前。タブのタイトルとヘッダーに出る |
 | `--exit-with-stdin` | 標準入力が閉じたら終了する。起動した側のプロセスと一緒に止めるため |
@@ -51,6 +51,14 @@ Chromium / WebKitの自動テストに加え、Android実機のWebViewで表示�
 ```sh
 npm start -- /path/to/repository --control-socket ~/.readit/control.sock
 python3 ../tools/readit_mcp.py --socket ~/.readit/control.sock
+```
+
+Windows PowerShellでは同一ユーザーだけに開くnamed pipeを使います。TCP portは公開しません。
+`--launch`ならランダムな名前を自動生成します。手動起動する場合:
+
+```powershell
+npm start -- C:\path\to\repository --control-socket \\.\pipe\readit-control
+python ..\tools\readit_mcp.py --socket \\.\pipe\readit-control
 ```
 
 AI のセッションごとに専用の Readit を使う場合は、`python3 ../tools/readit_mcp.py --launch` だけを登録します。最初のツール呼び出しで Readit を起動して画面を開き、セッションの終了とともに止めます（[docs/mcp.md](../docs/mcp.md#セッションごとにreaditを起動する)）。
@@ -102,7 +110,7 @@ npm run test:e2e               # Playwright（Chromium と WebKit）
 READIT_TEST_JAVA=1 npm run test:e2e   # Java の LSP テストも実行
 ```
 
-E2E テストは一時ディレクトリにプロジェクトを作り、実際のサーバーと wasm の画面を操作します。ネイティブ版の `src/ui.rs` と `src/ui_e2e_tests.rs` にある制御・ガイドのテストを、同じ手順で移植しています。LSP のテストは `tools/lsp` が無い場合は飛ばします。
+E2E テストは一時ディレクトリにプロジェクトを作り、実際のサーバーと wasm の画面を操作します。ネイティブ版の `src/ui.rs` と `src/ui_e2e_tests.rs` にある制御・ガイドのテストを、同じ手順で移植しています。LSP のテストは `tools/lsp` が無い場合は飛ばします。Windowsではブラウザが閉じたSSEを保持する時間が一定しないため、「画面を閉じた直後の未接続判定」と「次の呼び出しによるタブ再表示」の2ケースは未検証です。named pipe経由のMCP、質問待機、複数セッション、Chromium／WebKitの画面操作は実行します。
 
 確認したブラウザ: Playwright の Chromium と WebKit 26.6（Safari 26 相当）。Firefox は未確認です。wasm-gc と JS String Builtins に対応したブラウザが必要です。
 
