@@ -4,9 +4,17 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { test, expect, ok, repo, python } from './fixture.js';
 import { ReaditWatcher, formatPrompt } from '../../../integrations/pi/watcher.ts';
+import { sessionEndpoint } from '../../../integrations/pi/endpoint.ts';
 
 const waitScript = path.join(repo, 'tools/readit_wait.py');
 test.use({ files: { 'sample.py': 'one = 1\ntwo = 2\n' } });
+
+test('the pi extension chooses a native local IPC endpoint', () => {
+  expect(sessionEndpoint('win32', 'C:\\Users\\reader', 1234, 'abcd'))
+    .toBe('\\\\.\\pipe\\readit-pi-1234-abcd');
+  expect(sessionEndpoint('linux', '/home/reader', 1234, 'abcd'))
+    .toBe(path.join('/home/reader', '.readit/sessions', 'pi-1234-abcd.sock'));
+});
 
 async function loadTour(socket) {
   const state = await ok(socket, 'readit_state');

@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ReaditWatcher } from "./watcher.ts";
+import { sessionEndpoint } from "./endpoint.ts";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const python =
@@ -14,7 +15,7 @@ const python =
 // their own windows and tours. READIT_SOCKET instead joins an existing Readit.
 const shared = process.env.READIT_SOCKET;
 const socket = shared ||
-  path.join(os.homedir(), ".readit/sessions", `pi-${process.pid}-${randomBytes(2).toString("hex")}.sock`);
+  sessionEndpoint(process.platform, os.homedir(), process.pid, randomBytes(2).toString("hex"));
 const mcpArgs = shared
   ? ["--socket", shared]
   : ["--launch", "--socket", socket, "--label", "pi", "--workspace", process.cwd()];
