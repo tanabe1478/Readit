@@ -32,7 +32,6 @@ MCPクライアントごとの設定形式に合わせてこのcommandとargsを
 
 `--control-socket`を指定しない起動では、外部操作の待受を作りません。指定時はlocal IPCだけを作ります。Unixでは親ディレクトリ700・socket 600、WindowsではNodeの既定ACLで作成ユーザーに限定した `\\.\pipe\readit-*` named pipeです。Windowsでも制御用TCP portは公開しません。
 Web版の画面用のHTTPは `127.0.0.1` だけで待ち受け、起動ごとのトークンとHostヘッダーの確認で、他のサイトのページからの操作を拒否します。要求はブラウザで開いている画面が処理し、画面を開いていない間は「Readit is not open in a browser」を返します。
-旧版（ネイティブ版）は `./artifacts/Readit.app/Contents/MacOS/Readit --control-socket ...` で同じように接続できます。
 別のReaditには別のsocketを指定します。既存のsocketは上書きしません。クラッシュで残った場合は、そのReaditプロセスが終了していることを確認してからsocketファイルを削除してください。通常終了時には自動で削除します。
 
 ## セッションごとにReaditを起動する
@@ -128,13 +127,11 @@ python3 /absolute/path/to/Readit/tools/readit_wait.py --stop-when-idle
 
 ## 単発のコードに紐づく吹き出し
 
-
 `readit_guide_show` は対象コードを選択し、その近くに解説と「次へ・質問・終了」を表示します。`expected_text` に現在のコードをそのまま渡し、`event_sequence` には状態の `guide_event_sequence` を指定してください。説明はプレーンテキストで最大2,000文字です。
 
 `readit_guide_events(workspace, after)` でボタンへの反応を取得します。非破壊の連番方式で直近128件を保持します。`latest_sequence` を次回の `after` と `event_sequence` に使います。`next` なら次の箇所、`question` なら質問文とコード・元の説明・直前の質問と回答を受け取ります。`readit_guide_answer` に `workspace`、ステップの `id`、質問イベントの連番を `question_sequence`、回答を `body` として渡します。ガイドの位置は保ったまま回答し、「次へ」でのみ先へ進みます。`end` / `interrupted` / `cleared` または `truncated: true` では案内を止めてください。Escでも終了します。`readit_guide_clear` で吹き出しを消せます。
 
 ファイル移動・本文編集で古い吹き出しを無効化し、画面外へのスクロールでは一時的に隠します。LLMの呼び出しは外部クライアントが担当します。MCP側からLLMを自動起動する機能ではなく、接続先がガイド中にイベントをポーリングして次の説明を送る方式です。音声は未実装です。
-
 
 `readit_guide_show` の呼び出し例（workspaceとevent_sequenceは現在の状態で置き換えます）:
 
@@ -152,11 +149,9 @@ python3 /absolute/path/to/Readit/tools/readit_wait.py --stop-when-idle
 }
 ```
 
-
 「質問」で入力欄を開き、「送信」で1〜2,000文字の質問を送ります。空欄は送信しません。送信後は質問と回答待ち表示を残し、回答後は「追加で質問」できます。回答は最大4,000文字です。質問イベントには `question`、`expected_text`、行・列、`explanation`、`previous_question`、`previous_answer` が含まれます。終了解除やソース変更後、または別の質問への回答は拒否します。入力中のキャンセルでは送信せず元の説明へ戻ります。
 
 従来の固定補足を返す `detail` イベントは `question` に置き換えました。クライアントは質問を処理して `readit_guide_answer` を呼ぶ必要があります。LLMが接続されていない場合、回答は自動生成されません。
-
 
 ## 関連コードを横に固定
 
@@ -170,7 +165,7 @@ python3 /absolute/path/to/Readit/tools/readit_wait.py --stop-when-idle
 
 ## 概観からコードへ読む
 
-`readit_guide_load` に任意の `overview` を追加すると、最初にネイティブの「概観」タブを表示する。目的、構成と処理の流れ、各章の概要・対象ファイルを確認してから、章の「コードを読む」で登録済みステップへ移動できる。ヘッダーと吹き出しの「概観」で戻る。タブは×／⌘Wで閉じ、タブ切替ショートカットでも移動できる。
+`readit_guide_load` に任意の `overview` を追加すると、最初に「概観」タブを表示する。目的、構成と処理の流れ、各章の概要・対象ファイルを確認してから、章の「コードを読む」で登録済みステップへ移動できる。ヘッダーと吹き出しの「概観」で戻る。タブは×／⌘Wで閉じ、タブ切替ショートカットでも移動できる。
 
 ```json
 {
@@ -226,6 +221,4 @@ python3 /absolute/path/to/Readit/tools/readit_wait.py --stop-when-idle
 予測は `readit_state.guide_tour.predictions` に、ステップ順の配列で入ります（予測が無ければ空配列）。各要素は `step_id`、`status`（`answered` / `unknown`）、`answer`（`unknown` では `null`）です。`guide_tour.steps` と `guide` にも `kind` が入ります。記録すると `readit_guide_events` に `action: "prediction"` のイベント（`id`、`tour_id`、`status`、`answer`）が追加され、連番が進みます。`readit_wait.py` はこのイベントでは終了しません。予測はAIに答え合わせを求めるものではないためです。
 
 `readit_guide_revise` は既読部分の予測を保持します。予測は表示中のステップでしか記録できないので、置き換わる未読部分に予測はありません。ガイドのclear、プロジェクトの切替、アプリの再起動で予測は消えます。
-
-旧版（ネイティブ版）はこの拡張に対応していません。`claims` や `reader_context` を含む概観は登録時にエラーになり、ステップの `kind`・`prompt`・`verifies` は無視されて通常の説明として表示されます。
 

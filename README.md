@@ -3,7 +3,6 @@
 AIが書いたコードを、人が理解するためのIDE。ブラウザで動くWeb版（`web/`）が本体です。
 画面はMoonBitをwasm-gcにコンパイルして動かし、ファイル・Git・言語サーバー・MCPの中継はローカルサーバー（MoonBitをJSにコンパイルしてNode.jsで実行）が担当します。サーバーは `127.0.0.1` だけで待ち受けます。
 ファイルツリー・タブ・編集を基本に、変更の比較とコードナビゲーションを備えます。外部のAIがMCPで同じエディターを操作し、人間の読解を案内できます。
-Rust / GPUIのmacOSネイティブ版は旧版として残しています（[旧版](#旧版ネイティブ版)）。
 
 ## 起動
 
@@ -195,27 +194,3 @@ Web版はMoonBit、web-tree-sitterとTree-sitterの各文法（MIT・Apache-2.0�
 ### 根拠と予測で読む
 
 AIの説明を読むだけで終わらせず、読む人が自分でコードを確かめるための仕組みです。概観の重要な主張には根拠のコードが付き、「コード上で確認」か「推論」かが分かります。根拠を開いてもガイドの進み具合は変わりません。ガイドの途中には、先に自分の予測を書いてから進む「予測」と、その予測を実際のコードと並べて見る「検証」のステップを置けます。予測は採点せず、AIの応答も待ちません。詳細は [MCP仕様](docs/mcp.md#根拠前提予測で読む) を参照してください。
-
-
-## 旧版（ネイティブ版）
-
-Rust / GPUIのmacOSネイティブアプリです（`src/`、`Cargo.toml`）。今後の開発はWeb版で行い、旧版は参照用に残しています。機能とMCPの操作はWeb版と同じです。
-
-```sh
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run -- --demo
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run -- /absolute/path/to/repository --control-socket /tmp/readit-guide/control.sock
-```
-
-Rust stable、Xcode、Gitが必要です。開発時はMetalシェーダーを実行時コンパイルします。
-`cargo build --release --offline` の後に `python3 scripts/package_macos.py` で `artifacts/Readit.app` を作成できます（アドホック署名のローカル開発版）。
-
-テスト:
-
-```sh
-cargo test --offline
-cargo test --offline --test language_services -- --ignored
-```
-
-GPUI 0.2.2、GPUI Component 0.5.1、Tree-sitterによる独立アプリです。GPUI ComponentはApache-2.0で、ZedのGPL編集エンジンは組み込んでいません。[構成とライセンス](docs/architecture-and-licensing.md) / [第三者ライセンス](THIRD_PARTY_NOTICES.md)
-
-`--features performance` を付けたビルドでは `READIT_PERF=/tmp/readit.jsonl READIT_PERF_SECONDS=60` でローカルCPU処理時間を収集し、`python3 scripts/perf_report.py /tmp/readit.jsonl` で集計できます。[計測手順と実測結果](docs/performance-investigation.md)を参照してください。

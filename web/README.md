@@ -2,11 +2,11 @@
 
 Readit を MoonBit で書き直したブラウザ版です。画面は MoonBit を wasm-gc にコンパイルして動かし、ファイル・Git・言語サーバー・MCP の制御ソケットは、同じく MoonBit を JS にコンパイルしたローカルサーバー（Node.js）が担当します。サーバーは `127.0.0.1` だけで待ち受けます。
 
-機能はネイティブ版（リポジトリ直下の Rust / GPUI 版）と同じです。MCP の操作と `tools/readit_mcp.py` もそのまま使えます。
+MCP の操作は `tools/readit_mcp.py` から行います。
 
 ## 起動
 
-必要なもの: MoonBit（`moon`、mise の `http:moonbit` 0.10.14 で確認）、Node.js 24、npm。Windows 11でもネイティブ実行できます。LSP を使う場合は、ネイティブ版と同じ `python3 scripts/setup_lsp.py` で `tools/lsp` を用意します。
+必要なもの: MoonBit（`moon`、mise の `http:moonbit` 0.10.14 で確認）、Node.js 24、npm。Windows 11でもネイティブ実行できます。LSP を使う場合は `python3 scripts/setup_lsp.py` で `tools/lsp` を用意します。
 
 ```sh
 cd web
@@ -46,7 +46,7 @@ Chromium / WebKitの自動テストに加え、Android実機のWebViewで表示�
 
 ## AI から操作する
 
-ネイティブ版と同じ手順です。制御 socket を付けて起動し、MCP クライアントには `tools/readit_mcp.py` を登録します。
+制御 socket を付けて起動し、MCP クライアントには `tools/readit_mcp.py` を登録します。
 
 ```sh
 npm start -- /path/to/repository --control-socket ~/.readit/control.sock
@@ -87,7 +87,11 @@ AI のセッションごとに専用の Readit を使う場合は、`python3 ../
 | `server.js` | API 呼び出し、タイマー、クリップボード、正規表現 |
 | `highlight.js` | Tree-sitter（web-tree-sitter）による構文ハイライト |
 
-## ネイティブ版との違い
+## 文字と余白
+
+文字サイズ・行高・余白は `www/style.css` の `:root` のトークンだけで決めます。規約は [docs/typography.md](../docs/typography.md) にあり、`tests/e2e/typography.spec.js` が検査します。
+
+## ブラウザでの制約
 
 - ブラウザが予約しているキーは奪えない場合があります。代替キーを用意しています: ⌃W（タブを閉じる）、⌃N（新規ファイル）、⌃⇧T（閉じたタブを開く）、⌃Q（終了）、⌥⌘←/→（タブ切替）。
 - macOS のメニューバーの代わりに、画面上部にメニューがあります。
@@ -101,7 +105,7 @@ AI のセッションごとに専用の Readit を使う場合は、`python3 ../
 - ページには起動ごとのトークンが埋め込まれ、API はこのトークンなしでは応答しません。他のサイトのページから API を呼べないようにするためです。
 - 各画面はランダムなwindow IDでSSEを所有し、終了時に認証付きbeaconで明示的に解除します。古い画面の遅延した解除は、新しい画面の接続を外せません。さらに各control eventを画面が即時ackするため、Windowsが閉じたSSE socketを保持しても、応答待ちへ入る前にstaleな接続を解除します。
 - Content-Security-Policy で、同一オリジン以外の読み込みを禁止しています。
-- ファイル操作の検査（シンボリックリンクの除外、外部で変更されたファイルへの上書き拒否、予約領域の保護）はネイティブ版と同じです。
+- ファイル操作の検査（シンボリックリンクの除外、外部で変更されたファイルへの上書き拒否、予約領域の保護）を行います。
 
 ## テスト
 
@@ -111,7 +115,7 @@ npm run test:e2e               # Playwright（Chromium と WebKit）
 READIT_TEST_JAVA=1 npm run test:e2e   # Java の LSP テストも実行
 ```
 
-E2E テストは一時ディレクトリにプロジェクトを作り、実際のサーバーと wasm の画面を操作します。ネイティブ版の `src/ui.rs` と `src/ui_e2e_tests.rs` にある制御・ガイドのテストを、同じ手順で移植しています。LSP のテストは `tools/lsp` が無い場合は飛ばします。Windowsでもnamed pipe経由のMCP、質問待機、複数セッション、画面を閉じた直後の未接続判定と再表示、Chromium／WebKitの画面操作を実行します。
+E2E テストは一時ディレクトリにプロジェクトを作り、実際のサーバーと wasm の画面を操作します。LSP のテストは `tools/lsp` が無い場合は飛ばします。Windowsでもnamed pipe経由のMCP、質問待機、複数セッション、画面を閉じた直後の未接続判定と再表示、Chromium／WebKitの画面操作を実行します。
 
 確認したブラウザ: Playwright の Chromium と WebKit 26.6（Safari 26 相当）。Firefox は未確認です。wasm-gc と JS String Builtins に対応したブラウザが必要です。
 
