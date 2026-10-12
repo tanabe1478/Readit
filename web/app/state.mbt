@@ -124,8 +124,20 @@ fn strings(value : Json?) -> Array[String] {
 }
 
 ///|
+/// A path outside the workspace naming: POSIX, Windows drive or UNC.
+fn absolute_path(path : String) -> Bool {
+  @core.starts_with(path, "/") ||
+  @core.starts_with(path, "\\\\") ||
+  (
+    path.length() >= 3 &&
+    path[1] == ':' &&
+    (path[2] == '/' || path[2] == '\\')
+  )
+}
+
+///|
 fn Workspace::absolute(self : Workspace, path : String) -> String {
-  if @core.starts_with(path, "/") {
+  if absolute_path(path) {
     path
   } else {
     self.root + "/" + path

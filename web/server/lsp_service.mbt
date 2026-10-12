@@ -668,6 +668,15 @@ fn Service::finish(
   } else {
     found
   }
+  // Windows servers answer with native paths; inside the project the page
+  // knows files as root + "/" + relative, so name them that way.
+  let found = found.map(t => if @lsp.drive_path(t.path) &&
+    is_inside(self.root, t.path) &&
+    t.path != self.root {
+    { ..t, path: self.root + "/" + relative_key(self.root, t.path) }
+  } else {
+    t
+  })
   let contents : Map[String, String] = Map([])
   for doc in snapshot.documents {
     contents[doc.0] = doc.1

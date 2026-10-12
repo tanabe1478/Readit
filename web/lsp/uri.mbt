@@ -1,8 +1,26 @@
 ///|
+/// A Windows path with a drive letter, such as `C:\\Users` or `C:/Users`.
+pub fn drive_path(path : String) -> Bool {
+  path.length() >= 3 &&
+  path[1] == ':' &&
+  (path[2] == '/' || path[2] == '\\') &&
+  (
+    (path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')
+  )
+}
+
+///|
 /// A `file://` URI for an absolute path, percent-encoding UTF-8 bytes.
+/// A Windows path becomes `file:///C:/...`, the form language servers send.
 pub fn path_to_uri(path : String) -> String {
   let out = StringBuilder()
   out.write_string("file://")
+  let path = if drive_path(path) {
+    out.write_string("/" + @core.slice(path, 0, 1) + ":")
+    @core.replace_all(@core.slice(path, 2, path.length()), "\\", "/")
+  } else {
+    path
+  }
   for b in @utf8.encode(path) {
     let c = b.to_int()
     let keep = (c >= 'a'.to_int() && c <= 'z'.to_int()) ||
@@ -44,7 +62,20 @@ fn hex_value(c : Int) -> Int? {
 
 ///|
 /// The local path of a `file://` URI; None for other schemes or hosts.
+/// `file:///c%3A/x` becomes the Windows path `C:\\x`.
 pub fn uri_to_path(uri : String) -> String? {
+  match decode_uri_path(uri) {
+    Some(p) if p.length() >= 3 && p[0] == '/' && p[2] == ':' && drive_path(@core.slice(p, 1, p.length())) =>
+      Some(
+        Int::unsafe_to_char(p[1].to_int() - (if p[1] >= 97 && p[1] <= 122 { 32 } else { 0 })).to_string() +
+        @core.replace_all(@core.slice(p, 2, p.length()), "/", "\\"),
+      )
+    other => other
+  }
+}
+
+///|
+fn decode_uri_path(uri : String) -> String? {
   let prefix = "file://"
   if !@core.starts_with(uri, prefix) {
     return None

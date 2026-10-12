@@ -24,6 +24,16 @@ fn field(args : Json, key : String) -> Json? {
 }
 
 ///|
+/// A path under the root as the page names it: relative, with "/" separators.
+fn relative_key(root : String, path : String) -> String {
+  @core.replace_all(
+    @core.slice(path, root.length() + 1, path.length()),
+    "\\",
+    "/",
+  )
+}
+
+///|
 fn text_arg(args : Json, key : String) -> String raise Failure {
   match field(args, key) {
     Some(String(s)) => s
@@ -255,7 +265,7 @@ fn Server::dispatch(
         )
       }
       let relative = if is_inside(ws.root, path) && path != ws.root {
-        @core.slice(path, ws.root.length() + 1, path.length())
+        relative_key(ws.root, path)
       } else {
         path
       }
@@ -285,14 +295,8 @@ fn Server::dispatch(
       let canonical = realpath(path) catch {
         e => fail("定義ファイルを開けません: \{e.message()}")
       }
-      if is_inside(ws.root, canonical) {
-        return Some({
-          "relative": @core.slice(
-            canonical,
-            ws.root.length() + 1,
-            canonical.length(),
-          ),
-        })
+      if is_inside(ws.root, canonical) && canonical != ws.root {
+        return Some({ "relative": relative_key(ws.root, canonical) })
       }
       if !self.service.returned_path(ws.root, path) &&
         !self.service.returned_path(ws.root, canonical) {

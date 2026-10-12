@@ -42,6 +42,11 @@ test "uri roundtrip" {
   let path = "/Users/x/日本語 file (1).py"
   assert_eq(@lsp.uri_to_path(@lsp.path_to_uri(path)), Some(path))
   assert_eq(@lsp.path_to_uri("/a b"), "file:///a%20b")
+  // Windows paths travel as file:///C:/... and come back native, drive in upper case.
+  assert_eq(@lsp.path_to_uri("C:\\Users\\a b\\x.py"), "file:///C:/Users/a%20b/x.py")
+  assert_eq(@lsp.uri_to_path("file:///c%3A/Users/a%20b/x.py"), Some("C:\\Users\\a b\\x.py"))
+  assert_eq(@lsp.uri_to_path("file:///C:/x"), Some("C:\\x"))
+  assert_eq(@lsp.uri_to_path("file:///tmp/x"), Some("/tmp/x"))
 }
 
 ///|

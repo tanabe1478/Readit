@@ -514,7 +514,7 @@ fn render_overview() -> String {
 ///|
 fn render_pinned_head() -> String {
   guard reader.pinned is Some(p) else { return "" }
-  let full = if @core.starts_with(p.path, "/") {
+  let full = if absolute_path(p.path) {
     p.path
   } else {
     p.root + "/" + p.path

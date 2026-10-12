@@ -449,7 +449,7 @@ fn parse_evidence(value : Json) -> Evidence raise Failure {
   }
   let path = control_path(raw)
   // Definitions outside the project resolve to absolute paths.
-  if @core.starts_with(path, "/") {
+  if absolute_path(path) {
     fail("evidence path must be a workspace file")
   }
   let (source, start, end) = anchor_range(value, path, expected)

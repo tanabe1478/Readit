@@ -438,7 +438,7 @@ fn admit_paths(values : Array[String], done : () -> Unit) -> Unit {
   let missing = []
   for v in values {
     let key = control_key(v)
-    if @core.starts_with(key, "/") ||
+    if absolute_path(key) ||
       reader.workspace.known(key) ||
       missing.contains(key) {
       continue
