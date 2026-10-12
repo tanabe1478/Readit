@@ -114,4 +114,11 @@ export const dom = {
   })(),
   viewport_height: () => window.innerHeight,
   set_title: (t) => { if (document.title !== t) document.title = t; },
+  // Zoom changes the code size on :root; style.css derives every code view from it.
+  set_code_size: (size, lh) => {
+    const root = document.documentElement.style;
+    if (root.getPropertyValue('--code') === `${size}px`) return;
+    root.setProperty('--code', `${size}px`);
+    root.setProperty('--lh', `${lh}px`);
+  },
 };

@@ -577,6 +577,7 @@ fn show_region(id : String, visible : Bool) -> Unit {
 ///|
 fn render() -> Unit {
   validate_guide()
+  js_set_code_size(reader.font_size, line_height())
   if reader.pinned is Some(p) && p.root != reader.workspace.root {
     reader.pinned = None
   }

@@ -1,8 +1,10 @@
 // Code views: the main editor, the pinned panel and small previews.
 
 ///|
+/// Code line height: 1.6 × the code size, snapped to the 4px grid so rows
+/// share the UI's rhythm (14→24, 12→20, 16→24, 18→28).
 fn line_height() -> Double {
-  (reader.font_size * 1.6).round()
+  (reader.font_size * 1.6 / 4.0).round() * 4.0
 }
 
 ///|
@@ -214,7 +216,7 @@ fn code_rows(o : CodeOptions, layout : Layout) -> String {
   } else {
     "height:\{px(layout.height())};min-width:calc(\{layout.widest + gutter_columns(count) + 4}ch + 8px);"
   }
-  "<div class=\"lines\{if o.wrap { " wrap" } else { "" }}\{if o.numbers { "" } else { " bare" }}\" data-view=\"\{o.view}\" data-lh=\"\{lh}\" style=\"\{size}--gutter:\{digits + 2}ch;--lh:\{px(lh)};font-size:\{px(reader.font_size)}\">\{rows}</div>"
+  "<div class=\"lines\{if o.wrap { " wrap" } else { "" }}\{if o.numbers { "" } else { " bare" }}\" data-view=\"\{o.view}\" data-lh=\"\{lh}\" style=\"\{size}--gutter:\{digits + 2}ch\">\{rows}</div>"
 }
 
 ///|

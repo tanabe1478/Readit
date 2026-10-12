@@ -195,11 +195,12 @@ fn tree_entries() -> Array[@core.TreeEntry] {
 }
 
 ///|
+/// Mirrors .tree-row in www/style.css: 44px touch rows, 32px otherwise.
 fn tree_row_height() -> Double {
   if narrow_layout() {
     44.0
   } else {
-    29.0
+    32.0
   }
 }
 
@@ -248,7 +249,7 @@ fn render_tree() -> String {
       }
     }
     out.write_string(
-      "<div class=\"tree-row\{if active { " active" } else { "" }}\" data-act=\"tree\" data-arg=\"\{e(entry.path)}\" data-tree=\"\{e(entry.path)}\" title=\"\{e(reader.workspace.absolute(entry.path))}\" style=\"top:\{px(i.to_double() * tree_row_height())};padding-left:\{px(14.0 + entry.depth.to_double() * 14.0)}\"><span class=\"tree-icon\">\{icon}</span><span class=\"tree-name\">\{e(entry.name)}</span><span class=\"badge\">\{badge}</span></div>",
+      "<div class=\"tree-row\{if active { " active" } else { "" }}\" data-act=\"tree\" data-arg=\"\{e(entry.path)}\" data-tree=\"\{e(entry.path)}\" title=\"\{e(reader.workspace.absolute(entry.path))}\" style=\"top:\{px(i.to_double() * tree_row_height())};padding-left:\{px(16.0 + entry.depth.to_double() * 16.0)}\"><span class=\"tree-icon\">\{icon}</span><span class=\"tree-name\">\{e(entry.name)}</span><span class=\"badge\">\{badge}</span></div>",
     )
   }
   out.write_string("</div>")
@@ -362,9 +363,7 @@ fn render_search_bar() -> String {
 ///|
 fn render_diff() -> String {
   let out = StringBuilder()
-  out.write_string(
-    "<div class=\"diff\" style=\"font-size:\{px(reader.font_size)}\">",
-  )
+  out.write_string("<div class=\"diff\">")
   for row in reader.diff_rows {
     let (cls, mark) = match row.kind {
       Added => ("added", "+")

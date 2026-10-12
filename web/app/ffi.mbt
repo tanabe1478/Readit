@@ -66,6 +66,10 @@ fn js_viewport_height() -> Double = "dom" "viewport_height"
 fn js_set_title(text : String) = "dom" "set_title"
 
 ///|
+/// Code size and line height for every code view, as CSS variables on :root.
+fn js_set_code_size(size : Double, line_height : Double) = "dom" "set_code_size"
+
+///|
 fn js_rpc(id : Int, op : String, body : String) = "app" "rpc"
 
 ///|
