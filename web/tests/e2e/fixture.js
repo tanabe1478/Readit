@@ -13,7 +13,7 @@ export const repo = path.dirname(web);
 export const python = process.platform === 'win32' ? 'python' : 'python3';
 
 export function makeProject(files, { git = false } = {}) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'readit-e2e-')));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'readit-e2e-')));
   for (const [name, text] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
     fs.writeFileSync(path.join(dir, name), text);

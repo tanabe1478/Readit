@@ -138,7 +138,9 @@ pub extern "js" fn cwd() -> String = "() => process.cwd()"
 // ---- files ----
 
 ///|
-extern "js" fn js_realpath(p : String) -> String = "(p) => globalThis.__readit.wrap(() => globalThis.__readit.fs.realpathSync(p))"
+/// The system realpath, so Windows 8.3 names (RUNNER~1) become the long names
+/// that Git and language servers report.
+extern "js" fn js_realpath(p : String) -> String = "(p) => globalThis.__readit.wrap(() => globalThis.__readit.fs.realpathSync.native(p))"
 
 ///|
 pub fn realpath(p : String) -> String raise NodeError {

@@ -152,7 +152,7 @@ test('a closed window is reopened on the next call', async ({ page, context }) =
 test('a session opens the folder it needs instead of its own', async ({ page }) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-'));
   fs.chmodSync(dir, 0o700);
-  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rs-parent-')));
+  const parent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'rs-parent-')));
   const wanted = path.join(parent, 'wanted');
   const sibling = path.join(parent, 'sibling');
   fs.mkdirSync(wanted);
