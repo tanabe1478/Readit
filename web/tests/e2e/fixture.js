@@ -102,7 +102,7 @@ export const test = base.extend({
   files: [null, { option: true }],
   git: [false, { option: true }],
   serverEnv: [{}, { option: true }],
-  readit: [async ({ page, files, git, serverEnv }, use) => {
+  readit: [async ({ page, files, git, serverEnv }, use, testInfo) => {
     const project = files ? makeProject(files, { git }) : demoProject();
     const server = await startServer(project, { env: serverEnv });
     const errors = [];
@@ -110,6 +110,8 @@ export const test = base.extend({
     await page.goto(server.url);
     await page.waitForFunction(() => window.readitReady === true && window.readitIdle());
     await use({ ...server, errors });
+    // The server's stderr explains failures the page cannot show (language servers, Git).
+    if (testInfo.status !== testInfo.expectedStatus) await testInfo.attach('server-log', { body: server.log(), contentType: 'text/plain' });
     expect(errors, 'page errors').toEqual([]);
     server.stop();
     fs.rmSync(project, {

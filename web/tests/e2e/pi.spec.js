@@ -138,18 +138,24 @@ test('the question button delivers the question to the session and the answer re
     await page.locator('#topbar button[data-act="overview"]').click();
     await page.locator('button[data-act="chapter"][data-arg="0"]').click();
     await expect(page.locator('#guide')).toContainText('なぜ 1 なの？ への答え: 最初の値です');
-    pi.faux.setResponses([
-      call('state', {}),
-      (context) => {
-        const s = lastResult(context);
-        const question = delivered(context);
-        return call('guide_revise', {
-          workspace: s.workspace, id: 'tour', event_sequence: s.guide_event_sequence, question_sequence: question.event.sequence,
-          answer: '二つめの答え', steps: unread, overview: s.guide_tour.overview,
-        });
-      },
-      fauxAssistantMessage('答えました'),
-    ]);
+    // The reader keeps moving while the model answers, so the revision is
+    // retried from a fresh state when the event sequence moved on.
+    const revise = (context) => {
+      const s = lastResult(context);
+      const question = delivered(context);
+      return call('guide_revise', {
+        workspace: s.workspace, id: 'tour', event_sequence: s.guide_event_sequence, question_sequence: question.event.sequence,
+        answer: '二つめの答え', steps: unread, overview: s.guide_tour.overview,
+      });
+    };
+    const settle = (context) => {
+      if (lastResult(context).error) {
+        pi.faux.appendResponses([revise, settle]);
+        return call('state', {});
+      }
+      return fauxAssistantMessage('答えました');
+    };
+    pi.faux.setResponses([call('state', {}), revise, settle]);
     await page.locator('button[data-act="guide-ask"]').click();
     await page.locator('#guide-question').fill('もう一つ');
     await page.locator('button[data-act="guide-send"]').click();
