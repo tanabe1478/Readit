@@ -1,13 +1,15 @@
 // HTML for each region. The glue replaces a region only when its HTML changes.
 
 ///|
-/// A nonempty `disabled` disables the button and explains why.
+/// A nonempty `disabled` disables the button and explains why. `name` is the
+/// accessible name of a button whose label is a symbol.
 fn button(
   act : String,
   label : String,
   arg? : String = "",
   extra? : String = "",
   disabled? : String = "",
+  name? : String = "",
 ) -> String {
   let data = if arg == "" { "" } else { " data-arg=\"\{e(arg)}\"" }
   let off = if disabled == "" {
@@ -15,7 +17,8 @@ fn button(
   } else {
     " disabled title=\"\{e(disabled)}\""
   }
-  "<button class=\"btn\{extra}\" data-act=\"\{act}\"\{data}\{off}>\{e(label)}</button>"
+  let aria = if name == "" { "" } else { " aria-label=\"\{e(name)}\"" }
+  "<button class=\"btn\{extra}\" data-act=\"\{act}\"\{data}\{off}\{aria}>\{e(label)}</button>"
 }
 
 ///|
@@ -140,7 +143,7 @@ fn render_topbar() -> String {
   }
   out.write_string("</div>")
   out.write_string(
-    "<div class=\"brand\"><span class=\"logo\">readit</span>\{if reader.label == "" { "" } else { "<span class=\"label\">\{e(reader.label)}</span>" }}\{caption(reader.workspace.name())}</div>",
+    "<div class=\"brand\"><h1 class=\"logo\">readit</h1>\{if reader.label == "" { "" } else { "<span class=\"label\">\{e(reader.label)}</span>" }}\{caption(reader.workspace.name())}</div>",
   )
   out.write_string("<div class=\"top-actions\">")
   if reader.tour is Some(t) && t.overview is Some(_) {
@@ -282,13 +285,13 @@ fn render_tabs() -> String {
   let out = StringBuilder()
   if reader.overview_tab {
     out.write_string(
-      "<div class=\"tab\{if reader.overview_visible { " selected" } else { "" }}\"\{if reader.overview_visible { " id=\"tab-selected\"" } else { "" }} data-act=\"overview\"><span>概観</span><span class=\"tab-close\" data-act=\"close-overview\">×</span></div>",
+      "<div class=\"tab\{if reader.overview_visible { " selected" } else { "" }}\"\{if reader.overview_visible { " id=\"tab-selected\"" } else { "" }} data-act=\"overview\"><span>概観</span><button class=\"tab-close\" data-act=\"close-overview\" aria-label=\"概観タブを閉じる\">×</button></div>",
     )
   }
   for tab in reader.tabs {
     let selected = !reader.overview_visible && reader.selected == Some(tab)
     out.write_string(
-      "<div class=\"tab\{if selected { " selected" } else { "" }}\"\{if selected { " id=\"tab-selected\"" } else { "" }} data-act=\"open-tab\" data-arg=\"\{e(tab)}\" data-tab=\"\{e(tab)}\" title=\"\{e(reader.workspace.absolute(tab))}\"><span>\{e(@core.base_name(tab))}</span><span class=\"dirty\">\{if is_dirty(tab) { "●" } else { "" }}</span><span class=\"tab-close\" data-act=\"close-tab\" data-arg=\"\{e(tab)}\">×</span></div>",
+      "<div class=\"tab\{if selected { " selected" } else { "" }}\"\{if selected { " id=\"tab-selected\"" } else { "" }} data-act=\"open-tab\" data-arg=\"\{e(tab)}\" data-tab=\"\{e(tab)}\" title=\"\{e(reader.workspace.absolute(tab))}\"><span>\{e(@core.base_name(tab))}</span><span class=\"dirty\">\{if is_dirty(tab) { "●" } else { "" }}</span><button class=\"tab-close\" data-act=\"close-tab\" data-arg=\"\{e(tab)}\" aria-label=\"\{e(@core.base_name(tab))} を閉じる\">×</button></div>",
     )
   }
   out.to_string()
@@ -357,7 +360,7 @@ fn render_search_bar() -> String {
   } else {
     "\{reader.search_index + 1} / \{count}"
   }
-  "<span class=\"caption\">\{e(status)}</span>\{button("search-case", "Aa", extra=if reader.search_case { " on" } else { "" })}\{button("search-regex", ".*", extra=if reader.search_regex { " on" } else { "" })}\{button("search-prev", "↑")}\{button("search-next", "↓")}\{button("search-close", "×")}"
+  "<span class=\"caption\">\{e(status)}</span>\{button("search-case", "Aa", extra=if reader.search_case { " on" } else { "" }, name="大文字と小文字を区別")}\{button("search-regex", ".*", extra=if reader.search_regex { " on" } else { "" }, name="正規表現")}\{button("search-prev", "↑", name="前の一致")}\{button("search-next", "↓", name="次の一致")}\{button("search-close", "×", name="検索を閉じる")}"
 }
 
 ///|
@@ -516,7 +519,7 @@ fn render_pinned_head() -> String {
   } else {
     p.root + "/" + p.path
   }
-  "<div class=\"pinned-title\">\{caption("固定したコード · 閲覧専用")}\{button("unpin-code", "×")}</div><div class=\"pinned-path\">\{caption(full)}</div><div class=\"pinned-state\">\{caption(if pinned_changed() { "本文に変更あり · 固定時の内容を表示中" } else { "固定時の内容を表示中" })}\{button("refresh-pinned", "更新")}</div>"
+  "<div class=\"pinned-title\">\{caption("固定したコード · 閲覧専用")}\{button("unpin-code", "×", name="固定を解除")}</div><div class=\"pinned-path\">\{caption(full)}</div><div class=\"pinned-state\">\{caption(if pinned_changed() { "本文に変更あり · 固定時の内容を表示中" } else { "固定時の内容を表示中" })}\{button("refresh-pinned", "更新")}</div>"
 }
 
 ///|
@@ -528,7 +531,7 @@ fn render_navpanel() -> String {
     "\{reader.nav_targets.length()}件"
   }
   out.write_string(
-    "<div class=\"nav-head\"><div class=\"row-buttons\"><span>\{e(reader.nav_title)}</span>\{caption(count)}</div><div class=\"row-buttons\">\{button("navigation", "一覧・絞り込み")}\{button("close-nav", "×")}</div></div><div class=\"nav-results\" id=\"nav-results\">",
+    "<div class=\"nav-head\"><div class=\"row-buttons\"><span>\{e(reader.nav_title)}</span>\{caption(count)}</div><div class=\"row-buttons\">\{button("navigation", "一覧・絞り込み")}\{button("close-nav", "×", name="結果を閉じる")}</div></div><div class=\"nav-results\" id=\"nav-results\">",
   )
   if reader.nav_targets.length() == 0 {
     out.write_string(
@@ -622,7 +625,7 @@ fn render_dialog_shell() -> String {
   } else {
     caption("Esc 閉じる")
   }
-  "<div class=\"dialog-title\"><span>\{e(dialog_title(dialog))}</span>\{close}</div><div class=\"dialog-inputs\">\{input}\{replacement}</div>"
+  "<div class=\"dialog-title\"><span id=\"dialog-title\">\{e(dialog_title(dialog))}</span>\{close}</div><div class=\"dialog-inputs\">\{input}\{replacement}</div>"
 }
 
 ///|
@@ -633,7 +636,7 @@ fn render_dialog_body() -> String {
       Delete(p) => p
       _ => affected(pending).join("\n")
     }
-    return "<div class=\"confirm\"><div>\{if deletion { "選択した項目を削除しますか？" } else { "変更を保存しますか？" }}</div><pre class=\"caption\">\{e(paths)}</pre>\{caption(if deletion { "フォルダの場合は中身も移動します。削除した項目は.readit/trashに保管され、メニューから復元できます。" } else { "保存しない場合、この操作の対象となる未保存の変更を破棄します。" })}<div class=\"row-buttons\">\{button("confirm-save", if deletion { "保存して削除" } else { "保存" })}\{button("confirm-discard", if deletion { "保存せず削除" } else { "保存しない" })}\{button("confirm-cancel", "キャンセル")}</div></div>"
+    return "<div class=\"confirm\"><div id=\"dialog-title\">\{if deletion { "選択した項目を削除しますか？" } else { "変更を保存しますか？" }}</div><pre class=\"caption\">\{e(paths)}</pre>\{caption(if deletion { "フォルダの場合は中身も移動します。削除した項目は.readit/trashに保管され、メニューから復元できます。" } else { "保存しない場合、この操作の対象となる未保存の変更を破棄します。" })}<div class=\"row-buttons\">\{button("confirm-save", if deletion { "保存して削除" } else { "保存" })}\{button("confirm-discard", if deletion { "保存せず削除" } else { "保存しない" })}\{button("confirm-cancel", "キャンセル")}</div></div>"
   }
   guard reader.dialog is Some(dialog) else { return "" }
   let out = StringBuilder()

@@ -14,14 +14,14 @@
   <div id="menu-layer"></div>
   <div id="main">
     <button id="sidebar-backdrop" data-act="sidebar" aria-label="ファイルツリーを閉じる" tabindex="-1"></button>
-    <aside id="sidebar" tabindex="0">
+    <aside id="sidebar" tabindex="0" aria-label="ファイルツリー">
       <div id="sidebar-head"></div>
       <div id="tree-scroll" class="scroll"></div>
       <div id="sidebar-resize"></div>
     </aside>
-    <section id="center">
+    <main id="center">
       <div id="tabs"></div>
-      <div id="overview" class="scroll" style="display:none"></div>
+      <div id="overview" class="scroll" role="region" aria-label="概観" style="display:none"></div>
       <div id="file-column">
         <div id="pathbar"></div>
         <div id="navbar"></div>
@@ -35,29 +35,30 @@
           <div id="empty-state" style="display:none"></div>
         </div>
       </div>
-    </section>
+      <!-- The hidden input sits at the caret (position: fixed); it lives in the main landmark. -->
+  <textarea id="editor-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="エディター入力"></textarea>
+    </main>
     <aside id="pinned" style="display:none">
       <div id="pinned-head"></div>
       <div id="pinned-scroll" class="scroll code-scroll"><div id="pinned-content"></div></div>
     </aside>
   </div>
   <div id="navpanel" style="display:none"></div>
-  <footer id="status"></footer>
+  <footer id="status" aria-live="polite"></footer>
   <div id="pointer-layer"></div>
-  <div id="guide" class="guide" style="display:none">
+  <div id="guide" class="guide" role="dialog" aria-label="読解ガイド" style="display:none">
     <div id="guide-main"></div>
     <div id="guide-predict"></div>
     <div id="guide-form"></div>
     <div id="guide-after"></div>
   </div>
   <div id="overlay" style="display:none">
-    <div id="dialog" tabindex="-1">
+    <div id="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" tabindex="-1">
       <div id="dialog-shell"></div>
       <div id="dialog-body"></div>
     </div>
   </div>
   <div id="context-layer"></div>
-  <textarea id="editor-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="エディター入力"></textarea>
   <pre id="fatal"></pre>
 </div>
 </body>

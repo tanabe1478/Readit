@@ -27,6 +27,7 @@
     "web-tree-sitter": "0.25.10"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-coding-agent": "1.1.0",
     "@playwright/test": "1.63.0"
