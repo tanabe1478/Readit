@@ -64,7 +64,8 @@ async function openWhenAsked(page, urlFile) {
   await page.waitForFunction(() => window.readitReady === true);
 }
 
-const exited = (child) => new Promise((resolve) => (child.exitCode !== null ? resolve() : child.on('exit', resolve)));
+// A child killed by a signal has no exit code, only a signal code.
+const exited = (child) => new Promise((resolve) => (child.exitCode !== null || child.signalCode !== null ? resolve() : child.on('exit', resolve)));
 
 test('two sessions launch separate windows with their own tours', async ({ page, context }) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-'));
