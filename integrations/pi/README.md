@@ -22,6 +22,6 @@ pi のセッションごとに専用の Readit を使います。最初に Readi
 
 ## テスト
 
-`web/tests/e2e/pi.spec.js` が、この拡張を pi の SDK セッションに読み込み、faux プロバイダー（台本どおりに応答し、どこにも接続しないモデル）で MCP ツールの呼び出しと質問の配信を確認します。`cd web && npx playwright test pi.spec` で実行します。
+`web/tests/e2e/pi.spec.js` が、この拡張を pi の SDK セッションに読み込み、faux プロバイダー（台本どおりに応答し、どこにも接続しないモデル）で MCP ツールの呼び出しと質問の配信を確認します。`cd web && npx playwright test pi.spec` で実行します。`pi-random.spec.js` は同じセッションで吹き出しのボタンを乱数順に押し続け、状態の矛盾を探します。
 
 待機は `tools/readit_wait.py` を子プロセスとして動かします。Readit が起動していない間は静かに再試行し、セッションの終了とともに止まります。`~/.pi/agent/mcp.json` に `readit` という名前のサーバーがある場合は、そちらが優先されます。

@@ -117,7 +117,9 @@ READIT_TEST_JAVA=1 npm run test:e2e   # Java の LSP テストも実行
 
 E2E テストは一時ディレクトリにプロジェクトを作り、実際のサーバーと wasm の画面を操作します。LSP のテストは `tools/lsp` が無い場合は飛ばします。
 
-`tests/e2e/pi.spec.js` は pi の拡張（`integrations/pi`）を端から端まで通します。pi 本体のテストと同じ faux プロバイダー（どこにも接続しない台本どおりのモデル）で pi の SDK セッションを作り、MCP 経由で Readit にツアーを登録し、ブラウザで吹き出しの各ボタン（章、根拠、概観、次へ、戻る、予測、質問、キャンセル、終了）を押して、質問が `tools/readit_wait.py` と拡張の watcher を通ってセッションへ届き、台本どおりの回答が吹き出しに戻ることを確認します。そのため `@earendil-works/pi-coding-agent` と `@earendil-works/pi-ai` を devDependencies に固定しています。Windowsでもnamed pipe経由のMCP、質問待機、複数セッション、画面を閉じた直後の未接続判定と再表示、Chromium／WebKitの画面操作を実行します。
+`tests/e2e/pi.spec.js` は pi の拡張（`integrations/pi`）を端から端まで通します。pi 本体のテストと同じ faux プロバイダー（どこにも接続しない台本どおりのモデル）で pi の SDK セッションを作り、MCP 経由で Readit にツアーを登録し、ブラウザで吹き出しの各ボタン（章、根拠、概観、次へ、戻る、予測、質問、キャンセル、終了）を押して、質問が `tools/readit_wait.py` と拡張の watcher を通ってセッションへ届き、台本どおりの回答が吹き出しに戻ることを確認します。そのため `@earendil-works/pi-coding-agent` と `@earendil-works/pi-ai` を devDependencies に固定しています。
+
+`tests/e2e/pi-random.spec.js` は同じ仕組みで、概観から章・次へ・戻る・質問・終了・概観をシード付きの乱数で押し続け、毎回の状態と吹き出しを期待モデルと突き合わせます。質問の途中で他のボタンを押す操作も含みます。失敗時は押した順序をレポートに添付します。既定は 2 シード × 40 回で、`READIT_RANDOM_SEED=3,4,5 READIT_RANDOM_STEPS=80 npx playwright test pi-random` のように広げられます。Windowsでもnamed pipe経由のMCP、質問待機、複数セッション、画面を閉じた直後の未接続判定と再表示、Chromium／WebKitの画面操作を実行します。
 
 確認したブラウザ: Playwright の Chromium と WebKit 26.6（Safari 26 相当）。Firefox は未確認です。wasm-gc と JS String Builtins に対応したブラウザが必要です。
 

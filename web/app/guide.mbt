@@ -625,8 +625,13 @@ fn guide_step(direction : Int, gate? : Bool = true) -> Unit {
     show_overview()
     return
   }
+  // The visible bubble is the latest state of its step (question, answer,
+  // prediction): keep it in its slot before copying the target, which may be
+  // this same step when a chapter button reopens it from the overview.
+  if reader.guide is Some(p) {
+    tour.steps[tour.index] = p
+  }
   let target = tour.steps[next].copy()
-  let previous = reader.guide
   load_texts([target.path], () => {
     activate_guide(target, result => {
       match result {
@@ -638,9 +643,6 @@ fn guide_step(direction : Int, gate? : Bool = true) -> Unit {
         }
         Ok(_) => {
           guard reader.tour is Some(tour) else { return }
-          if previous is Some(p) {
-            tour.steps[tour.index] = p
-          }
           tour.index = next
           tour.visited = tour.visited.max(tour.index)
           let id = tour.steps[tour.index].id
