@@ -23,6 +23,9 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      # The tools print Japanese; Windows consoles default to a legacy code page.
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
 
