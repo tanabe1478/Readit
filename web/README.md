@@ -111,11 +111,16 @@ AI のセッションごとに専用の Readit を使う場合は、`python3 ../
 
 ```sh
 moon test                      # core / editor / lsp の単体テスト
+moon test --target js          # 上に加えて app と server の単体テスト
 npm run test:e2e               # Playwright（Chromium と WebKit）
 READIT_TEST_JAVA=1 npm run test:e2e   # Java の LSP テストも実行
 ```
 
-E2E テストは一時ディレクトリにプロジェクトを作り、実際のサーバーと wasm の画面を操作します。LSP のテストは `tools/lsp` が無い場合は飛ばします。
+`app` の単体テスト（`app/*_wbtest.mbt`）は、アプリ全体を Node 上で動かします。ブラウザの代わりに `app/ffi_js.mbt` の「ブラウザの代役」が描画結果とサーバー呼び出しを記録し、`app/testkit_wbtest.mbt` の疑似サーバーがメモリ上のプロジェクトから応答します。テストはページと同じイベント（`act`、`press_key`、`type_text`）と MCP と同じ呼び出し（`mcp`）で操作し、描画された HTML と `readit_state` を検査します。`random_wbtest.mbt` は `tests/e2e/pi-random.spec.js` と同じランダム操作を 40 シード × 300 回、1 秒ほどで回します。本番ビルドは wasm-gc のままで、JS ターゲットはテスト専用です。`server/*_wbtest.mbt` は一時フォルダを作り、パスの安全判定、読めないファイルの扱い、保存・改名・削除・復元を実ファイルで確認します。
+
+E2E テストは一時ディレクトリにプロジェクトを作り、実際のサーバーと wasm の画面を操作します。LSP のテストは `tools/lsp` が無い場合は飛ばします。`failures.spec.js` は読めないファイル（大きすぎる、バイナリ、UTF-8 以外）とサーバーが止まった後の振る舞いを、`a11y.spec.js` は axe-core による主要画面の検査と、記号だけのボタンの名前、キーボードフォーカスの可視化を確認します。`tests/python/test_docs.py` は、スキルと docs/mcp.md が `tools/readit_mcp.py` の実際のツール名・引数・上限と一致することを検査します。
+
+GitHub Actions（`../.github/workflows/ci.yml`）が、これらすべてを Linux と Windows で実行します。MoonBit はインストーラーの最新版を使い、バージョンをログに出します。
 
 `tests/e2e/pi.spec.js` は pi の拡張（`integrations/pi`）を端から端まで通します。pi 本体のテストと同じ faux プロバイダー（どこにも接続しない台本どおりのモデル）で pi の SDK セッションを作り、MCP 経由で Readit にツアーを登録し、ブラウザで吹き出しの各ボタン（章、根拠、概観、次へ、戻る、予測、質問、キャンセル、終了）を押して、質問が `tools/readit_wait.py` と拡張の watcher を通ってセッションへ届き、台本どおりの回答が吹き出しに戻ることを確認します。そのため `@earendil-works/pi-coding-agent` と `@earendil-works/pi-ai` を devDependencies に固定しています。
 
@@ -132,4 +137,4 @@ E2E テストは一時ディレクトリにプロジェクトを作り、実際�
 - tree-sitter-markdown 0.5.3（MIT）。npm に wasm が無いため、ビルド時に GitHub のリリースから取得し、SHA-256 を検証します。
 - tree-sitter-moonbit（Apache-2.0、コミット `5435c30`）。wasm が公開されていないため、ビルドした結果を `third-party/tree-sitter-moonbit/` に置いています。作り直しは `node scripts/build-moonbit-grammar.mjs` です。
 
-テストだけで使うもの: @playwright/test 1.63.0（Apache-2.0）。
+テストだけで使うもの: @playwright/test 1.63.0（Apache-2.0）、@axe-core/playwright 4.13（MPL-2.0）、@earendil-works/pi-coding-agent と @earendil-works/pi-ai 1.1.0（MIT）。

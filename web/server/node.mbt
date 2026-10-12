@@ -568,3 +568,14 @@ pub extern "js" fn socket_reply(id : Int, line : String) -> Unit = "(id, line) =
 
 ///|
 pub extern "js" fn socket_alive(id : Int) -> Bool = "(id) => { const s = globalThis.__readit.handles.get(id); return !!s && !s.destroyed; }"
+
+///|
+/// Write Latin-1 bytes, for files that are not UTF-8 text.
+pub extern "js" fn write_bytes(p : String, bytes : String) -> Unit = "(p, s) => { globalThis.__readit.fs.writeFileSync(p, Buffer.from(s, 'latin1')); }"
+
+///|
+/// A new private directory under the system temporary folder.
+pub extern "js" fn temp_dir(prefix : String) -> String = "(p) => { const R = globalThis.__readit; return R.fs.mkdtempSync(R.path.join(R.os.tmpdir(), p)); }"
+
+///|
+pub extern "js" fn remove_tree(p : String) -> Unit = "(p) => { try { globalThis.__readit.fs.rmSync(p, { recursive: true, force: true }); } catch (e) {} }"

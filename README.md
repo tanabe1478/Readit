@@ -151,11 +151,14 @@ MCPサーバーを `--launch` 付きで登録すると、AIのセッションご
 ```sh
 cd web
 moon test                 # core / editor / lsp の単体テスト
+moon test --target js     # 上に加えて app（ブラウザなしで動かす UI 全体）と server（実フォルダ）
 npm run test:e2e          # Playwright（Chromium と WebKit）
 cd ..
 python3 -m unittest discover -s tests/python
 python3 -m unittest discover -s demo/tests -p 'test_*.py'
 ```
+
+同じ内容を GitHub Actions（`.github/workflows/ci.yml`）が push と pull request のたびに Linux と Windows で実行します。
 
 E2Eテストは一時ディレクトリにプロジェクトを作り、実際のサーバーとブラウザの画面を操作します。編集、ファイル操作、差分、LSPによる4言語の定義解決、MCP操作、読解ガイド、質問の受け渡しを確認しています。
 Javaの言語サーバーのテストは初回の取り込みが遅いため、`READIT_TEST_JAVA=1` を付けたときだけ実行します。

@@ -1,9 +1,6 @@
 // Floating layers: the ⌘ hover preview and the guide bubble.
 
 ///|
-fn js_natural_height(id : String) -> Double = "dom" "natural_height"
-
-///|
 /// Keep automatic placement outside the whole annotation, not just its first line.
 fn guide_placement(
   anchor : Rect,

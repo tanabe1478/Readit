@@ -5,11 +5,22 @@ import {
   "moonbitlang/core/json",
 }
 
-supported_targets = "wasm-gc"
+supported_targets = "wasm-gc+js"
 
 warnings = "-implicit_impl_as_method"
 
 options(
+  // The browser build is wasm-gc. The JS target exists for the unit tests,
+  // which run the app on Node against the browser double in ffi_js.mbt.
+  targets: {
+    "ffi.mbt": ["wasm-gc"],
+    "ffi_js.mbt": ["js"],
+    "fake_js.mbt": ["js"],
+    "testkit_wbtest.mbt": ["js"],
+    "guide_wbtest.mbt": ["js"],
+    "random_wbtest.mbt": ["js"],
+    "reader_wbtest.mbt": ["js"],
+  },
   link: {
     "wasm-gc": {
       "exports": [

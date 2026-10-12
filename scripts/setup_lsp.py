@@ -5,6 +5,7 @@ import platform
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import urllib.request
 
@@ -60,7 +61,8 @@ if rust:
         runtime["rustAnalyzer"] = rust
     except (subprocess.SubprocessError, OSError):
         pass
-java_launcher = install_java(services)
+# --skip-java leaves the Java server out, for machines that only read other languages (and CI).
+java_launcher = None if "--skip-java" in sys.argv else install_java(services)
 if java_launcher:
     runtime["java"] = shutil.which("java")
     runtime["javaLauncher"] = java_launcher

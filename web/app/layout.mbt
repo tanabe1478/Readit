@@ -3,9 +3,6 @@
 // rows need to exist in the DOM.
 
 ///|
-fn js_char_width(font_px : Double) -> Double = "dom" "char_width"
-
-///|
 priv struct Layout {
   key : String
   wrap : Bool

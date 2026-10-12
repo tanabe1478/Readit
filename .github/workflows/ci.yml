@@ -1,0 +1,109 @@
+# Every push and pull request: MoonBit unit tests on both targets, the Python
+# tool tests, the web build, and the Playwright suite on Linux and Windows.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            tools/lsp/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The installer serves the current release; its version is printed below.
+      - name: Install MoonBit (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Install MoonBit (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+          irm https://cli.moonbitlang.com/install/powershell.ps1 | iex
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.moon\bin"
+
+      - name: Toolchain versions
+        run: |
+          moon version --all
+          node --version
+          python --version
+
+      - name: MoonBit unit tests
+        working-directory: web
+        run: |
+          moon check
+          moon test
+          moon test --target js
+
+      - name: Python tool tests
+        run: |
+          python -m unittest discover -s tests/python
+          python -m unittest discover -s demo/tests -p 'test_*.py'
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build
+        working-directory: web
+        run: npm run build
+
+      - name: Language servers (Python, TypeScript)
+        run: python scripts/setup_lsp.py --skip-java
+
+      - name: Playwright browsers (Linux)
+        if: runner.os == 'Linux'
+        working-directory: web
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Playwright browsers (Windows)
+        if: runner.os == 'Windows'
+        working-directory: web
+        run: npx playwright install chromium
+
+      - name: End-to-end tests (Chromium)
+        working-directory: web
+        run: npx playwright test --project=chromium
+
+      - name: End-to-end tests (WebKit)
+        if: runner.os == 'Linux'
+        working-directory: web
+        run: npx playwright test --project=webkit
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-${{ matrix.os }}
+          path: web/test-results
+          retention-days: 7

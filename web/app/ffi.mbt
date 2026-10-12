@@ -111,3 +111,11 @@ fn js_confirm_leave(dirty : Bool) = "app" "confirm_leave"
 
 ///|
 fn js_close_window() = "app" "close_window"
+
+///|
+/// Full content height of an element, for sizing the guide bubble.
+fn js_natural_height(id : String) -> Double = "dom" "natural_height"
+
+///|
+/// Width of one code column at this font size, measured by the page.
+fn js_char_width(font_px : Double) -> Double = "dom" "char_width"
