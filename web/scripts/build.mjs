@@ -93,7 +93,8 @@ for (const [name, sha] of Object.entries(pinned)) {
 const source = path.join(cache, 'source');
 if (!fs.existsSync(source)) {
   fs.mkdirSync(source);
-  execFileSync('tar', ['xzf', path.join(cache, 'tree-sitter-markdown.tar.gz'), '-C', source]);
+  // Relative paths: GNU tar on Windows reads "D:" in an absolute path as a remote host.
+  execFileSync('tar', ['xzf', 'tree-sitter-markdown.tar.gz', '-C', 'source'], { cwd: cache });
 }
 copy(path.join(cache, 'tree-sitter-markdown.wasm'), path.join(www, 'grammars/markdown.wasm'));
 copy(path.join(cache, 'tree-sitter-markdown_inline.wasm'), path.join(www, 'grammars/markdown_inline.wasm'));
