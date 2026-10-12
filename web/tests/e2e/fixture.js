@@ -70,7 +70,14 @@ export async function startServer(project, { socket = true, env = {} } = {}) {
   return {
     url, socketPath, child, project,
     log: () => log,
-    stop: () => { child.kill(); if (socketDir) fs.rmSync(socketDir, { recursive: true, force: true }); },
+    stop: () => {
+      // On Windows a plain kill leaves language servers alive with the project as their cwd.
+      if (process.platform === 'win32') {
+        try { execFileSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' }); } catch { /* already gone */ }
+      }
+      child.kill();
+      if (socketDir) fs.rmSync(socketDir, { recursive: true, force: true });
+    },
   };
 }
 
