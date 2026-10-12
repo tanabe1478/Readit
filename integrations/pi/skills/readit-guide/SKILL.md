@@ -31,7 +31,7 @@ Use source and test evidence to distinguish what is verified from what is inferr
 
 ## Prepared reading tours
 
-For a walkthrough, read the relevant sources and prepare the complete route before showing the first step. Send `readit_guide_load(workspace, id, event_sequence, steps)` with 1–32 steps. Each step has a unique `id`, `title`, `body` (max 2,000 characters), `path`, one-based UTF-16 `line`/`column`, and exact `expected_text` from `readit_read`. All steps are validated before anything is replaced. Keep each selected range focused so code and explanation fit together. Use `readit_pin` for related code when helpful.
+For a walkthrough, read the relevant sources and prepare the complete route before showing the first step. Send `readit_guide_load(workspace, id, event_sequence, steps)` with 1–32 steps. Each step has a unique `id`, `title`, `body` (max 2,000 characters), `path`, one-based UTF-16 `line`/`column`, and exact `expected_text` from `readit_read`. All steps are validated before anything is replaced. Keep each selected range focused so code and explanation fit together. Use `readit_pin` for related code when helpful, and `readit_unpin` when it is no longer needed.
 
 Readit owns Next/Back and completes the last step locally. Its `step` events are informational: do not generate or push another step in response. The loaded route works even after the AI stops running. `readit_state.guide_tour` provides its id, current index, total steps, visited_through, and step ids/titles; indexes are zero-based.
 
